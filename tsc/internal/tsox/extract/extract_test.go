@@ -259,6 +259,20 @@ console.log(next());`)
 	}
 }
 
+func TestExtractUsesModuleScopeAlongsideBundledDOMDeclarations(t *testing.T) {
+	t.Parallel()
+
+	result := Extract(extractSourcePath, `const name: string = "TSOX";
+console.log(name);`)
+	if result.Program == nil || len(result.Diagnostics) != 0 {
+		t.Fatalf("module-scoped extraction failed: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+	name := variableStatement(t, result.Program, "name")
+	if name.Type.Kind != graph.TypeString {
+		t.Fatalf("name type: got %q, want string", name.Type.Kind)
+	}
+}
+
 func TestExtractAcceptsSourceCallableTargets(t *testing.T) {
 	t.Parallel()
 

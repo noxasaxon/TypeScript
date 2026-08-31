@@ -34,7 +34,10 @@ func Extract(sourcePath string, source string) graph.Result {
 	}, true))
 	host := compiler.NewCompilerHost("/src", fs, bundled.LibPath(), nil, nil)
 	config := tsoptions.NewParsedCommandLine(
-		&core.CompilerOptions{Strict: core.TSTrue},
+		&core.CompilerOptions{
+			Strict:          core.TSTrue,
+			ModuleDetection: core.ModuleDetectionKindForce,
+		},
 		[]string{virtualMainPath},
 		tspath.ComparePathsOptions{
 			UseCaseSensitiveFileNames: true,
