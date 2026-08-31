@@ -513,6 +513,12 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		if fence != nil {
 			return nil, fence
 		}
+		if !b.supportedCallTarget(data.Expression) {
+			if data.Expression.Kind == ast.KindIdentifier {
+				return nil, b.fenceWithMessage(data.Expression, "unsupported call target "+data.Expression.Text())
+			}
+			return nil, b.fence(node)
+		}
 		if callee.Type.Kind != graph.TypeFunction {
 			return nil, b.fence(node)
 		}
@@ -836,6 +842,54 @@ func (b *builder) consoleLogCall(node *ast.Node) (*ast.CallExpression, bool) {
 	}
 	globalConsole := b.checker.GetGlobalSymbol("console", ast.SymbolFlagsValue, nil)
 	return call, globalConsole != nil && b.checker.GetSymbolAtLocation(property.Expression) == globalConsole
+}
+
+// supportedCallTarget keeps calls inside the first slice tied to source-owned
+// functions. A checker type alone is not enough here: bundled declarations such
+// as parseFloat have perfectly usable function types, but their implementations
+// are outside the graph/emitter contract. Source function declarations,
+// parameters, arrows, and variables initialized from those values are safe to
+// lower. In particular, this also rejects an alias such as
+// `const parse = parseFloat` while accepting function-valued closures.
+func (b *builder) supportedCallTarget(node *ast.Node) bool {
+	return b.supportedCallValue(node, make(map[*ast.Symbol]bool))
+}
+
+func (b *builder) supportedCallValue(node *ast.Node, seen map[*ast.Symbol]bool) bool {
+	switch node.Kind {
+	case ast.KindIdentifier:
+		return b.supportedSourceSymbol(b.checker.GetSymbolAtLocation(node), seen)
+	case ast.KindParenthesizedExpression:
+		return b.supportedCallValue(node.AsParenthesizedExpression().Expression, seen)
+	case ast.KindArrowFunction:
+		return true
+	case ast.KindCallExpression:
+		return b.supportedCallValue(node.AsCallExpression().Expression, seen)
+	default:
+		return false
+	}
+}
+
+func (b *builder) supportedSourceSymbol(symbol *ast.Symbol, seen map[*ast.Symbol]bool) bool {
+	if symbol == nil || len(symbol.Declarations) == 0 || seen[symbol] {
+		return false
+	}
+	seen[symbol] = true
+	for _, declaration := range symbol.Declarations {
+		if ast.GetSourceFileOfNode(declaration) != b.file {
+			continue
+		}
+		switch declaration.Kind {
+		case ast.KindFunctionDeclaration, ast.KindParameter:
+			return true
+		case ast.KindVariableDeclaration:
+			initializer := declaration.AsVariableDeclaration().Initializer
+			if initializer != nil && b.supportedCallValue(initializer, seen) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func unaryOperator(kind ast.Kind) (string, bool) {

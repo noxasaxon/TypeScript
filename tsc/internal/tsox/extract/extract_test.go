@@ -259,6 +259,86 @@ console.log(next());`)
 	}
 }
 
+func TestExtractAcceptsSourceCallableTargets(t *testing.T) {
+	t.Parallel()
+
+	result := Extract(extractSourcePath, `function increment(value: number): number {
+  return value + 1;
+}
+const fromDeclaration = increment(1);
+const add = (value: number): number => {
+  return value + 1;
+};
+const fromVariable = add(1);
+function makeCounter(start: number): () => number {
+  return (): number => {
+    return start;
+  };
+}
+const next = makeCounter(10);
+const fromClosure = next();
+console.log(fromDeclaration);`)
+	if result.Program == nil || len(result.Diagnostics) != 0 {
+		t.Fatalf("source callable extraction failed: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+
+	for _, name := range []string{"fromDeclaration", "fromVariable", "next", "fromClosure"} {
+		value := variableStatement(t, result.Program, name)
+		if value.Value == nil || value.Value.Kind != graph.ExpressionCall {
+			t.Errorf("%s initializer: got %#v, want call", name, value.Value)
+		}
+	}
+	printStatement := statementOfKind(t, result.Program, graph.StatementPrint)
+	if len(printStatement.Arguments) != 1 || printStatement.Arguments[0].Kind != graph.ExpressionIdentifier {
+		t.Fatalf("console.log statement: got %#v, want identifier argument", printStatement.Arguments)
+	}
+}
+
+func TestExtractRejectsUnsupportedBundledFunctionCalls(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		wantInText string
+	}{
+		{
+			name:       "direct global",
+			source:     `const parsed = parseFloat("1");`,
+			wantInText: "parseFloat",
+		},
+		{
+			name: "source alias",
+			source: `const parser = parseFloat;
+const parsed = parser("1");`,
+			wantInText: "parser",
+		},
+		{
+			name:       "console argument",
+			source:     `console.log(parseFloat("1"));`,
+			wantInText: "parseFloat",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := Extract(extractSourcePath, tt.source)
+			if result.Program != nil {
+				t.Fatalf("unsupported bundled function call produced a graph: %#v", result.Program)
+			}
+			if len(result.Diagnostics) != 1 {
+				t.Fatalf("bundled function diagnostics: got %d, want 1 (%v)", len(result.Diagnostics), result.Diagnostics)
+			}
+			text := result.Diagnostics[0].Construct + " " + result.Diagnostics[0].Message
+			if !strings.Contains(text, tt.wantInText) {
+				t.Errorf("diagnostic does not name %s: construct=%q message=%q", tt.wantInText, result.Diagnostics[0].Construct, result.Diagnostics[0].Message)
+			}
+		})
+	}
+}
+
 func TestExtractRejectsUnsupportedConstructAtFirstFence(t *testing.T) {
 	t.Parallel()
 
