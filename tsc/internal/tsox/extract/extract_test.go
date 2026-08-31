@@ -1,0 +1,555 @@
+package extract
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/microsoft/typescript-go/tsox/graph"
+)
+
+const extractSourcePath = "/src/extract.ts"
+
+func TestExtractAcceptsCorpus01To04Subset(t *testing.T) {
+	t.Parallel()
+
+	source := `let counter = 3;
+const greeting = "count";
+counter = counter + 1 - 2 * 3 / 4 % 2;
+counter += 2;
+counter++;
+const less = counter < 10;
+const atMost = counter <= 10;
+const greater = counter > 0;
+const equal = counter === counter;
+const enabled = true;
+const both = less && greater;
+const either = less || greater;
+const negated = !equal;
+const negative = -counter;
+const concatenated = greeting + counter;
+const templated = ` + "`" + `${greeting}:${counter}` + "`" + `;
+if (less) {
+  counter += 1;
+} else {
+  counter = counter - 1;
+}
+while (counter > 0) {
+  counter = counter - 1;
+}
+for (let index = 0; index < 2; index++) {
+  counter += index;
+}
+function increment(value: number): number {
+  return value + 1;
+}
+function factorial(value: number): number {
+  if (value === 0) {
+    return 1;
+  }
+  return value * factorial(value - 1);
+}
+let result = increment(counter);
+let recursive = factorial(3);
+let offset = 1;
+const bump = (value: number) => {
+  return value + offset;
+};
+let closedValue = bump(counter);
+console.log(templated);`
+	result := Extract(extractSourcePath, source)
+
+	if result.Program == nil {
+		t.Fatalf("Extract returned no graph: diagnostics=%v", result.Diagnostics)
+	}
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("Extract returned unexpected diagnostics: %v", result.Diagnostics)
+	}
+	program := result.Program
+	if program.SourcePath != extractSourcePath {
+		t.Fatalf("graph source path: got %q, want %q", program.SourcePath, extractSourcePath)
+	}
+
+	statements := graphStatements(program)
+	wantStatements := []graph.StatementKind{
+		graph.StatementVariable,
+		graph.StatementExpression,
+		graph.StatementPrint,
+		graph.StatementIf,
+		graph.StatementWhile,
+		graph.StatementFor,
+		graph.StatementFunction,
+		graph.StatementReturn,
+	}
+	for _, want := range wantStatements {
+		if !statements[want] {
+			t.Errorf("graph is missing statement kind %q", want)
+		}
+	}
+
+	expressions, operators := graphExpressions(program)
+	wantExpressions := []graph.ExpressionKind{
+		graph.ExpressionNumber,
+		graph.ExpressionString,
+		graph.ExpressionBoolean,
+		graph.ExpressionIdentifier,
+		graph.ExpressionBinary,
+		graph.ExpressionUnary,
+		graph.ExpressionAssignment,
+		graph.ExpressionUpdate,
+		graph.ExpressionCall,
+		graph.ExpressionTemplate,
+		graph.ExpressionArrow,
+	}
+	for _, want := range wantExpressions {
+		if !expressions[want] {
+			t.Errorf("graph is missing expression kind %q", want)
+		}
+	}
+	for _, want := range []string{"+", "-", "*", "/", "%", "<", "<=", ">", "===", "=", "+=", "++", "!", "&&", "||"} {
+		if !operators[want] {
+			t.Errorf("graph is missing operator %q", want)
+		}
+	}
+
+	counter := variableStatement(t, program, "counter")
+	greeting := variableStatement(t, program, "greeting")
+	less := variableStatement(t, program, "less")
+	equal := variableStatement(t, program, "equal")
+	negative := variableStatement(t, program, "negative")
+	concatenated := variableStatement(t, program, "concatenated")
+	templated := variableStatement(t, program, "templated")
+	offset := variableStatement(t, program, "offset")
+	bump := variableStatement(t, program, "bump")
+	resultValue := variableStatement(t, program, "result")
+
+	if !counter.Mutable {
+		t.Error("counter should be mutable")
+	}
+	if greeting.Mutable {
+		t.Error("greeting should be immutable")
+	}
+	if counter.Binding == 0 || greeting.Binding == 0 || offset.Binding == 0 {
+		t.Fatal("declarations must have non-zero binding identities")
+	}
+	if counter.Type.Kind != graph.TypeNumber {
+		t.Errorf("counter type: got %q, want number", counter.Type.Kind)
+	}
+	if greeting.Type.Kind != graph.TypeString {
+		t.Errorf("greeting type: got %q, want string", greeting.Type.Kind)
+	}
+	if less.Type.Kind != graph.TypeBoolean || equal.Type.Kind != graph.TypeBoolean {
+		t.Errorf("comparison types: less=%q equal=%q, want boolean", less.Type.Kind, equal.Type.Kind)
+	}
+	if negative.Type.Kind != graph.TypeNumber {
+		t.Errorf("negative type: got %q, want number", negative.Type.Kind)
+	}
+	if concatenated.Type.Kind != graph.TypeString {
+		t.Errorf("string concatenation type: got %q, want string", concatenated.Type.Kind)
+	}
+	if templated.Type.Kind != graph.TypeString {
+		t.Errorf("template type: got %q, want string", templated.Type.Kind)
+	}
+
+	if counterReference := firstIdentifier(t, program, "counter"); counterReference.Binding != counter.Binding {
+		t.Errorf("counter reference binding: got %d, want declaration binding %d", counterReference.Binding, counter.Binding)
+	}
+
+	increment := functionStatement(t, program, "increment")
+	if increment.Binding == 0 {
+		t.Fatal("increment declaration must have a non-zero binding identity")
+	}
+	if increment.ReturnType.Kind != graph.TypeNumber {
+		t.Errorf("increment return type: got %q, want number", increment.ReturnType.Kind)
+	}
+	if len(increment.Parameters) != 1 {
+		t.Fatalf("increment parameters: got %d, want 1", len(increment.Parameters))
+	}
+	if increment.Parameters[0].Type.Kind != graph.TypeNumber || increment.Parameters[0].Binding == 0 {
+		t.Errorf("increment parameter: type=%q binding=%d, want number and non-zero binding", increment.Parameters[0].Type.Kind, increment.Parameters[0].Binding)
+	}
+	valueReference := firstIdentifierInStatements(t, increment.Body, "value")
+	if valueReference.Binding != increment.Parameters[0].Binding {
+		t.Errorf("increment parameter reference binding: got %d, want %d", valueReference.Binding, increment.Parameters[0].Binding)
+	}
+
+	factorial := functionStatement(t, program, "factorial")
+	if factorial.ReturnType.Kind != graph.TypeNumber {
+		t.Errorf("factorial return type: got %q, want number", factorial.ReturnType.Kind)
+	}
+	recursiveCall := firstCallTo(t, factorial.Body, "factorial")
+	if recursiveCall.Callee == nil || recursiveCall.Callee.Binding != factorial.Binding {
+		t.Fatalf("recursive call binding: got %v, want function binding %d", bindingOf(recursiveCall.Callee), factorial.Binding)
+	}
+
+	if resultValue.Value == nil || resultValue.Value.Kind != graph.ExpressionCall || resultValue.Value.Type.Kind != graph.TypeNumber {
+		t.Fatalf("result initializer: got %#v, want number-valued call", resultValue.Value)
+	}
+	if resultValue.Value.Callee == nil || resultValue.Value.Callee.Binding != increment.Binding {
+		t.Errorf("increment call binding: got %v, want function binding %d", bindingOf(resultValue.Value.Callee), increment.Binding)
+	}
+
+	if bump.Value == nil || bump.Value.Kind != graph.ExpressionArrow {
+		t.Fatalf("bump initializer: got %#v, want block arrow", bump.Value)
+	}
+	if bump.Type.Kind != graph.TypeFunction || bump.Value.Type.Kind != graph.TypeFunction {
+		t.Errorf("bump function type: statement=%q expression=%q, want function", bump.Type.Kind, bump.Value.Type.Kind)
+	}
+	if len(bump.Value.Parameters) != 1 || bump.Value.Parameters[0].Type.Kind != graph.TypeNumber {
+		t.Errorf("bump parameters: got %#v, want one number parameter", bump.Value.Parameters)
+	}
+	if len(bump.Value.Body) == 0 {
+		t.Fatal("bump arrow body is empty")
+	}
+	offsetReference := firstIdentifierInStatements(t, bump.Value.Body, "offset")
+	if offsetReference.Binding != offset.Binding {
+		t.Errorf("closure capture binding: got %d, want offset binding %d", offsetReference.Binding, offset.Binding)
+	}
+
+	printStatement := statementOfKind(t, program, graph.StatementPrint)
+	if len(printStatement.Arguments) != 1 || printStatement.Arguments[0].Type.Kind != graph.TypeString {
+		t.Errorf("console.log argument: got %#v, want one string argument", printStatement.Arguments)
+	}
+
+	for _, expression := range allGraphExpressions(program) {
+		if expression.Kind == graph.ExpressionUpdate && expression.Operator == "++" && expression.Prefix {
+			t.Error("counter/index ++ should be represented as postfix update")
+		}
+	}
+}
+
+func TestExtractAcceptsEscapingMutableClosure(t *testing.T) {
+	t.Parallel()
+
+	result := Extract(extractSourcePath, `function makeCounter(start: number): () => number {
+  let value: number = start;
+  return (): number => {
+    value += 1;
+    return value;
+  };
+}
+const next = makeCounter(10);
+console.log(next());`)
+	if result.Program == nil || len(result.Diagnostics) != 0 {
+		t.Fatalf("closure extraction failed: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+
+	makeCounter := functionStatement(t, result.Program, "makeCounter")
+	if makeCounter.ReturnType.Kind != graph.TypeFunction || makeCounter.ReturnType.Result == nil || makeCounter.ReturnType.Result.Kind != graph.TypeNumber {
+		t.Fatalf("makeCounter return type: got %#v, want () => number", makeCounter.ReturnType)
+	}
+	next := variableStatement(t, result.Program, "next")
+	if next.Type.Kind != graph.TypeFunction || next.Type.Result == nil || next.Type.Result.Kind != graph.TypeNumber {
+		t.Fatalf("next type: got %#v, want () => number", next.Type)
+	}
+
+	value := variableStatement(t, result.Program, "value")
+	var closure *graph.Expression
+	for _, expression := range allGraphExpressions(result.Program) {
+		if expression.Kind == graph.ExpressionArrow {
+			closure = expression
+			break
+		}
+	}
+	if closure == nil {
+		t.Fatal("returned closure expression not found")
+	}
+	valueReference := firstIdentifierInStatements(t, closure.Body, "value")
+	if valueReference.Binding != value.Binding {
+		t.Fatalf("closure capture binding: got %d, want %d", valueReference.Binding, value.Binding)
+	}
+}
+
+func TestExtractRejectsUnsupportedConstructAtFirstFence(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		source    string
+		construct string
+		position  graph.Position
+	}{
+		{
+			name:      "interface",
+			source:    "const before = 1;\ninterface User { value: number }\nconst after = 2;",
+			construct: "interface",
+			position:  graph.Position{Line: 2, Column: 1},
+		},
+		{
+			name:      "object literal",
+			source:    "const before = 1;\nlet x = {};",
+			construct: "object",
+			position:  graph.Position{Line: 2, Column: 9},
+		},
+		{
+			name:      "array literal",
+			source:    "const before = 1;\nlet x = [];",
+			construct: "array",
+			position:  graph.Position{Line: 2, Column: 9},
+		},
+		{
+			name:      "for of",
+			source:    "const before = 1;\nfor (const value of \"ok\") {}",
+			construct: "for-of",
+			position:  graph.Position{Line: 2, Column: 1},
+		},
+		{
+			name:      "property access",
+			source:    "const before = 1;\nlet x = before.toString();",
+			construct: "property access",
+			position:  graph.Position{Line: 2, Column: 9},
+		},
+		{
+			name:      "async function",
+			source:    "const before = 1;\nasync function run() { return before; }",
+			construct: "async",
+			position:  graph.Position{Line: 2, Column: 1},
+		},
+		{
+			name:      "any type",
+			source:    "const value: any = 1;",
+			construct: "any",
+			position:  graph.Position{Line: 1, Column: 14},
+		},
+		{
+			name:      "union type",
+			source:    "const value: number | string = 1;",
+			construct: "union",
+			position:  graph.Position{Line: 1, Column: 14},
+		},
+		{
+			name:      "nested function",
+			source:    "function outer(): number {\n  function inner(): number { return 1; }\n  return inner();\n}",
+			construct: "nested function",
+			position:  graph.Position{Line: 2, Column: 3},
+		},
+		{
+			name:      "function print",
+			source:    "function value(): number { return 1; }\nconsole.log(value);",
+			construct: "console.log argument",
+			position:  graph.Position{Line: 2, Column: 13},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			result := Extract(extractSourcePath, tt.source)
+			if result.Program != nil {
+				t.Fatalf("unsupported %s produced a graph: %#v", tt.construct, result.Program)
+			}
+			if len(result.Diagnostics) != 1 {
+				t.Fatalf("diagnostics for unsupported %s: got %d, want 1 (%v)", tt.construct, len(result.Diagnostics), result.Diagnostics)
+			}
+			diagnostic := result.Diagnostics[0]
+			if diagnostic.SourcePath != extractSourcePath {
+				t.Errorf("diagnostic source path: got %q, want %q", diagnostic.SourcePath, extractSourcePath)
+			}
+			if diagnostic.Position != tt.position {
+				t.Errorf("diagnostic position: got %+v, want %+v", diagnostic.Position, tt.position)
+			}
+			if !diagnosticNamesConstruct(diagnostic, tt.construct) {
+				t.Errorf("diagnostic does not name %q: construct=%q message=%q", tt.construct, diagnostic.Construct, diagnostic.Message)
+			}
+		})
+	}
+}
+
+func TestExtractReturnsSemanticDiagnosticWithoutGraph(t *testing.T) {
+	t.Parallel()
+
+	result := Extract(extractSourcePath, `const value: number = "not a number";`)
+	if result.Program != nil {
+		t.Fatalf("semantic error produced a graph: %#v", result.Program)
+	}
+	if len(result.Diagnostics) != 1 {
+		t.Fatalf("semantic diagnostics: got %d, want 1 (%v)", len(result.Diagnostics), result.Diagnostics)
+	}
+	if result.Diagnostics[0].Message == "" {
+		t.Fatal("semantic diagnostic has an empty message")
+	}
+}
+
+func graphStatements(program *graph.Program) map[graph.StatementKind]bool {
+	seen := make(map[graph.StatementKind]bool)
+	var visit func([]*graph.Statement)
+	visit = func(statements []*graph.Statement) {
+		for _, statement := range statements {
+			if statement == nil {
+				continue
+			}
+			seen[statement.Kind] = true
+			visit(statement.Init)
+			visit(statement.Then)
+			visit(statement.Else)
+			visit(statement.Body)
+		}
+	}
+	visit(program.Statements)
+	return seen
+}
+
+func graphExpressions(program *graph.Program) (map[graph.ExpressionKind]bool, map[string]bool) {
+	kinds := make(map[graph.ExpressionKind]bool)
+	operators := make(map[string]bool)
+	for _, expression := range allGraphExpressions(program) {
+		kinds[expression.Kind] = true
+		if expression.Operator != "" {
+			operators[expression.Operator] = true
+		}
+	}
+	return kinds, operators
+}
+
+func allGraphExpressions(program *graph.Program) []*graph.Expression {
+	var expressions []*graph.Expression
+	var visitExpression func(*graph.Expression)
+	var visitStatements func([]*graph.Statement)
+	visitExpression = func(expression *graph.Expression) {
+		if expression == nil {
+			return
+		}
+		expressions = append(expressions, expression)
+		visitExpression(expression.Left)
+		visitExpression(expression.Right)
+		visitExpression(expression.Operand)
+		visitExpression(expression.Callee)
+		for _, argument := range expression.Arguments {
+			visitExpression(argument)
+		}
+		for _, expressionPart := range expression.Expressions {
+			visitExpression(expressionPart)
+		}
+		visitStatements(expression.Body)
+	}
+	visitStatements = func(statements []*graph.Statement) {
+		for _, statement := range statements {
+			if statement == nil {
+				continue
+			}
+			visitExpression(statement.Value)
+			for _, argument := range statement.Arguments {
+				visitExpression(argument)
+			}
+			visitExpression(statement.Condition)
+			visitStatements(statement.Init)
+			visitExpression(statement.Increment)
+			visitStatements(statement.Then)
+			visitStatements(statement.Else)
+			visitStatements(statement.Body)
+		}
+	}
+	visitStatements(program.Statements)
+	return expressions
+}
+
+func variableStatement(t *testing.T, program *graph.Program, name string) *graph.Statement {
+	t.Helper()
+	for _, statement := range allStatements(program) {
+		if statement.Kind == graph.StatementVariable && statement.Name == name {
+			return statement
+		}
+	}
+	t.Fatalf("variable declaration %q not found", name)
+	return nil
+}
+
+func functionStatement(t *testing.T, program *graph.Program, name string) *graph.Statement {
+	t.Helper()
+	for _, statement := range allStatements(program) {
+		if statement.Kind == graph.StatementFunction && statement.Name == name {
+			return statement
+		}
+	}
+	t.Fatalf("function declaration %q not found", name)
+	return nil
+}
+
+func statementOfKind(t *testing.T, program *graph.Program, kind graph.StatementKind) *graph.Statement {
+	t.Helper()
+	for _, statement := range allStatements(program) {
+		if statement.Kind == kind {
+			return statement
+		}
+	}
+	t.Fatalf("statement kind %q not found", kind)
+	return nil
+}
+
+func allStatements(program *graph.Program) []*graph.Statement {
+	var result []*graph.Statement
+	var visit func([]*graph.Statement)
+	visit = func(statements []*graph.Statement) {
+		for _, statement := range statements {
+			if statement == nil {
+				continue
+			}
+			result = append(result, statement)
+			visit(statement.Init)
+			visit(statement.Then)
+			visit(statement.Else)
+			visit(statement.Body)
+		}
+	}
+	visit(program.Statements)
+	return result
+}
+
+func firstIdentifier(t *testing.T, program *graph.Program, name string) *graph.Expression {
+	t.Helper()
+	return firstIdentifierInExpressions(t, allGraphExpressions(program), name)
+}
+
+func firstIdentifierInStatements(t *testing.T, statements []*graph.Statement, name string) *graph.Expression {
+	t.Helper()
+	var expressions []*graph.Expression
+	visitProgram := &graph.Program{Statements: statements}
+	expressions = allGraphExpressions(visitProgram)
+	return firstIdentifierInExpressions(t, expressions, name)
+}
+
+func firstIdentifierInExpressions(t *testing.T, expressions []*graph.Expression, name string) *graph.Expression {
+	t.Helper()
+	for _, expression := range expressions {
+		if expression.Kind == graph.ExpressionIdentifier && expression.Name == name {
+			return expression
+		}
+	}
+	t.Fatalf("identifier %q not found", name)
+	return nil
+}
+
+func firstCallTo(t *testing.T, statements []*graph.Statement, name string) *graph.Expression {
+	t.Helper()
+	for _, expression := range allGraphExpressions(&graph.Program{Statements: statements}) {
+		if expression.Kind == graph.ExpressionCall && expression.Callee != nil && expression.Callee.Name == name {
+			return expression
+		}
+	}
+	t.Fatalf("call to %q not found", name)
+	return nil
+}
+
+func bindingOf(expression *graph.Expression) graph.BindingID {
+	if expression == nil {
+		return 0
+	}
+	return expression.Binding
+}
+
+func diagnosticNamesConstruct(diagnostic graph.Diagnostic, construct string) bool {
+	text := normalizeDiagnosticText(diagnostic.Construct + " " + diagnostic.Message)
+	want := normalizeDiagnosticText(construct)
+	return strings.Contains(text, want)
+}
+
+func normalizeDiagnosticText(value string) string {
+	value = strings.ToLower(value)
+	var normalized strings.Builder
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' {
+			normalized.WriteRune(r)
+		}
+	}
+	return normalized.String()
+}
