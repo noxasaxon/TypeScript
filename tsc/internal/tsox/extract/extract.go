@@ -405,6 +405,9 @@ func (b *builder) variableDeclarations(node *ast.Node) ([]*graph.Statement, *fen
 		if fence != nil {
 			return nil, fence
 		}
+		if valueType.Kind == graph.TypeFunction && declaration.Initializer.Kind == ast.KindIdentifier && b.supportedCallValue(declaration.Initializer, make(map[*ast.Symbol]bool)) {
+			return nil, b.fenceDiagnostic(declaration.Initializer, "FunctionAlias", "unsupported function-valued storage alias")
+		}
 		if !sameType(valueType, value.Type) {
 			return nil, b.typeFlowFence(declaration.Initializer, valueType, value.Type)
 		}
@@ -710,6 +713,9 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		data := node.AsCallExpression()
 		if data.QuestionDotToken != nil || data.TypeArguments != nil {
 			return nil, b.fence(node)
+		}
+		if data.Expression.Kind == ast.KindCallExpression {
+			return nil, b.fenceWithMessage(data.Expression, "unsupported non-identifier call target")
 		}
 		callee, fence := b.expression(data.Expression)
 		if fence != nil {

@@ -259,6 +259,35 @@ console.log(next());`)
 	}
 }
 
+func TestExtractFencesFunctionAliasAtTheStorageConstruct(t *testing.T) {
+	t.Parallel()
+
+	result := Extract(extractSourcePath, `function value(): number { return 1; }
+const alias = value;
+console.log(alias());`)
+	if result.Program != nil || len(result.Diagnostics) != 1 {
+		t.Fatalf("function alias result: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+	diagnostic := result.Diagnostics[0]
+	if diagnostic.Construct != "FunctionAlias" || diagnostic.Position != (graph.Position{Line: 2, Column: 15}) || !strings.Contains(diagnostic.Message, "function-valued storage alias") {
+		t.Fatalf("function alias diagnostic: got %#v", diagnostic)
+	}
+}
+
+func TestExtractFencesReturnedFunctionCallAtTheOuterCall(t *testing.T) {
+	t.Parallel()
+
+	result := Extract(extractSourcePath, `function make(): () => number { return (): number => { return 1; }; }
+console.log(make()());`)
+	if result.Program != nil || len(result.Diagnostics) != 1 {
+		t.Fatalf("returned function call result: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+	diagnostic := result.Diagnostics[0]
+	if diagnostic.Construct != "CallExpression" || diagnostic.Position != (graph.Position{Line: 2, Column: 13}) || !strings.Contains(diagnostic.Message, "non-identifier call target") {
+		t.Fatalf("returned function call diagnostic: got %#v", diagnostic)
+	}
+}
+
 func TestExtractAcceptsNamedObjectsDenseArraysMutationAndIdentity(t *testing.T) {
 	t.Parallel()
 
