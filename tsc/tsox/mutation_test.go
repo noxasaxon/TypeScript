@@ -103,6 +103,22 @@ console.log(combine(callback, values, box));`
 	}
 }
 
+func TestMutationSitesExcludesWriteTargetsFromBindingUses(t *testing.T) {
+	t.Parallel()
+
+	result := tsox.MutationSites("writes.ts", `function noop(): void { return; }
+let empty: void = noop();
+empty = noop();`)
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("MutationSites diagnostics: %v", result.Diagnostics)
+	}
+	for _, binding := range result.Bindings {
+		if binding.Name == "empty" && len(binding.Uses) != 0 {
+			t.Fatalf("assignment target leaked into binding uses: %#v", binding.Uses)
+		}
+	}
+}
+
 func assertText(t *testing.T, source string, span mutation.Span, want string) {
 	t.Helper()
 	if got := source[span.Start:span.End]; got != want {

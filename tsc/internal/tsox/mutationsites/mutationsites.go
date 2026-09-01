@@ -100,7 +100,7 @@ func (b *builder) recordIdentifier(node *ast.Node) {
 		return
 	}
 	binding := b.ensureBinding(symbol, node)
-	if isDeclarationName(node) {
+	if isDeclarationName(node) || isWriteTarget(node) {
 		return
 	}
 	binding.Uses = append(binding.Uses, b.span(node))
@@ -235,6 +235,26 @@ func isDeclarationName(node *ast.Node) bool {
 	switch parent.Kind {
 	case ast.KindVariableDeclaration, ast.KindParameter, ast.KindFunctionDeclaration:
 		return parent.Name() == node
+	}
+	return false
+}
+
+func isWriteTarget(node *ast.Node) bool {
+	parent := node.Parent
+	if parent == nil {
+		return false
+	}
+	if parent.Kind == ast.KindBinaryExpression {
+		expression := parent.AsBinaryExpression()
+		return expression.Left == node && ast.IsAssignmentOperator(expression.OperatorToken.Kind)
+	}
+	if parent.Kind == ast.KindPrefixUnaryExpression {
+		operator := parent.AsPrefixUnaryExpression().Operator
+		return operator == ast.KindPlusPlusToken || operator == ast.KindMinusMinusToken
+	}
+	if parent.Kind == ast.KindPostfixUnaryExpression {
+		operator := parent.AsPostfixUnaryExpression().Operator
+		return operator == ast.KindPlusPlusToken || operator == ast.KindMinusMinusToken
 	}
 	return false
 }
