@@ -26,7 +26,7 @@ type Position struct {
 	Column int
 }
 
-// TypeKind is one of the value categories required by the first slice.
+// TypeKind is one of the value categories required by the current subset.
 type TypeKind string
 
 const (

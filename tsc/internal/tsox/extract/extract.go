@@ -1,5 +1,5 @@
 // Package extract constructs the checked, plain-data semantic graph for the
-// first TSOX slice.
+// supported TSOX subset.
 package extract
 
 import (
@@ -23,7 +23,7 @@ import (
 const virtualMainPath = "/src/main.ts"
 
 // Extract checks source with one TypeScript checker and either returns the
-// first-slice semantic graph or one source-order fence diagnostic.
+// semantic graph or one source-order fence diagnostic.
 func Extract(sourcePath string, source string) graph.Result {
 	if sourcePath == "" {
 		sourcePath = "main.ts"
@@ -791,6 +791,9 @@ func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceErr
 	if operator, ok := assignmentOperator(operatorKind); ok {
 		if data.Left.Kind != ast.KindIdentifier && data.Left.Kind != ast.KindPropertyAccessExpression && data.Left.Kind != ast.KindElementAccessExpression {
 			return nil, b.fence(data.Left)
+		}
+		if data.Left.Kind != ast.KindIdentifier && operator != "=" {
+			return nil, b.fenceWithMessage(data.Left, "unsupported compound composite assignment")
 		}
 		left, fence := b.expression(data.Left)
 		if fence != nil {

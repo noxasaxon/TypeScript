@@ -343,6 +343,7 @@ const narrow: Narrow = wide;`,
 		},
 		{name: "recursive named shape", source: `interface Link { value: number; next: Link; }`, construct: "recursive named shape"},
 		{name: "array method", source: `const values: number[] = [1]; values.push(2);`, construct: "push"},
+		{name: "compound composite assignment", source: `interface Point { x: number; } const point: Point = { x: 1 }; point.x += 1;`, construct: "compound composite assignment"},
 		{name: "object print", source: `interface Point { x: number; } const point: Point = { x: 1 }; console.log(point);`, construct: "console.log argument"},
 		{name: "array print", source: `const values: number[] = [1]; console.log(values);`, construct: "console.log argument"},
 	}
