@@ -73,11 +73,13 @@ func Extract(sourcePath string, source string) graph.Result {
 	defer done()
 
 	b := &builder{
-		sourcePath:  sourcePath,
-		file:        file,
-		checker:     typeChecker,
-		bindings:    make(map[*ast.Symbol]graph.BindingID),
-		nextBinding: 1,
+		sourcePath:    sourcePath,
+		file:          file,
+		checker:       typeChecker,
+		bindings:      make(map[*ast.Symbol]graph.BindingID),
+		nextBinding:   1,
+		shapeIDs:      make(map[*ast.Symbol]graph.ShapeID),
+		shapeBuilding: make(map[*ast.Symbol]bool),
 	}
 	statements, fence := b.statements(file.Statements.Nodes, true)
 	if fence != nil {
@@ -85,6 +87,7 @@ func Extract(sourcePath string, source string) graph.Result {
 	}
 	return graph.Result{Program: &graph.Program{
 		SourcePath: sourcePath,
+		Shapes:     b.shapes,
 		Statements: statements,
 	}}
 }
@@ -108,11 +111,15 @@ func typescriptDiagnostic(sourcePath string, file *ast.SourceFile, diagnostic *a
 }
 
 type builder struct {
-	sourcePath  string
-	file        *ast.SourceFile
-	checker     *checker.Checker
-	bindings    map[*ast.Symbol]graph.BindingID
-	nextBinding graph.BindingID
+	sourcePath    string
+	file          *ast.SourceFile
+	checker       *checker.Checker
+	bindings      map[*ast.Symbol]graph.BindingID
+	nextBinding   graph.BindingID
+	shapes        []graph.Shape
+	shapeIDs      map[*ast.Symbol]graph.ShapeID
+	shapeBuilding map[*ast.Symbol]bool
+	returnType    *graph.Type
 }
 
 type fenceError struct {
@@ -133,6 +140,15 @@ func (b *builder) statements(nodes []*ast.Node, topLevel bool) ([]*graph.Stateme
 
 func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, *fenceError) {
 	switch node.Kind {
+	case ast.KindInterfaceDeclaration, ast.KindTypeAliasDeclaration:
+		if !topLevel {
+			return nil, b.fence(node)
+		}
+		if _, fence := b.ensureShapeDeclaration(node); fence != nil {
+			return nil, fence
+		}
+		return nil, nil
+
 	case ast.KindVariableStatement:
 		data := node.AsVariableStatement()
 		if data.Modifiers() != nil {
@@ -261,6 +277,60 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 			Body:      body,
 		}}, nil
 
+	case ast.KindForOfStatement:
+		data := node.AsForInOrOfStatement()
+		if data.AwaitModifier != nil || data.Initializer == nil || data.Initializer.Kind != ast.KindVariableDeclarationList {
+			return nil, b.fence(node)
+		}
+		list := data.Initializer.AsVariableDeclarationList()
+		flags := data.Initializer.Flags & ast.NodeFlagsBlockScoped
+		if (flags != ast.NodeFlagsConst && flags != ast.NodeFlagsLet) || len(list.Declarations.Nodes) != 1 {
+			return nil, b.fence(data.Initializer)
+		}
+		declarationNode := list.Declarations.Nodes[0]
+		declaration := declarationNode.AsVariableDeclaration()
+		nameNode := declaration.Name()
+		if nameNode == nil || nameNode.Kind != ast.KindIdentifier || declaration.Initializer != nil || declaration.ExclamationToken != nil {
+			return nil, b.fence(declarationNode)
+		}
+		if declaration.Type != nil {
+			if fence := b.validateTypeNode(declaration.Type); fence != nil {
+				return nil, fence
+			}
+		}
+		iterable, fence := b.expression(data.Expression)
+		if fence != nil {
+			return nil, fence
+		}
+		if iterable.Type.Kind != graph.TypeArray || iterable.Type.Element == nil {
+			return nil, b.fenceWithMessage(node, "unsupported for-of source type")
+		}
+		valueType, fence := b.checkedType(nameNode)
+		if fence != nil {
+			return nil, fence
+		}
+		if !sameType(valueType, *iterable.Type.Element) {
+			return nil, b.typeFlowFence(nameNode, valueType, *iterable.Type.Element)
+		}
+		binding, fence := b.binding(nameNode)
+		if fence != nil {
+			return nil, fence
+		}
+		body, fence := b.statementBody(data.Statement)
+		if fence != nil {
+			return nil, fence
+		}
+		return []*graph.Statement{{
+			Kind:     graph.StatementForOf,
+			Position: b.position(node),
+			Binding:  binding,
+			Name:     nameNode.Text(),
+			Mutable:  flags == ast.NodeFlagsLet,
+			Type:     valueType,
+			Value:    iterable,
+			Body:     body,
+		}}, nil
+
 	case ast.KindFunctionDeclaration:
 		if !topLevel {
 			return nil, b.fenceDiagnostic(node, "NestedFunctionDeclaration", "unsupported construct nested function declaration")
@@ -280,6 +350,14 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 			if fence != nil {
 				return nil, fence
 			}
+			if b.returnType == nil {
+				return nil, b.fenceWithMessage(node, "return outside a supported function")
+			}
+			if !sameType(*b.returnType, value.Type) {
+				return nil, b.typeFlowFence(data.Expression, *b.returnType, value.Type)
+			}
+		} else if b.returnType != nil && b.returnType.Kind != graph.TypeVoid {
+			return nil, b.fenceWithMessage(node, "missing value for non-void return")
 		}
 		return []*graph.Statement{{
 			Kind:     graph.StatementReturn,
@@ -327,6 +405,9 @@ func (b *builder) variableDeclarations(node *ast.Node) ([]*graph.Statement, *fen
 		if fence != nil {
 			return nil, fence
 		}
+		if !sameType(valueType, value.Type) {
+			return nil, b.typeFlowFence(declaration.Initializer, valueType, value.Type)
+		}
 		binding, fence := b.binding(nameNode)
 		if fence != nil {
 			return nil, fence
@@ -373,7 +454,10 @@ func (b *builder) functionDeclaration(node *ast.Node) (*graph.Statement, *fenceE
 	if fence != nil {
 		return nil, fence
 	}
+	previousReturnType := b.returnType
+	b.returnType = functionType.Result
 	body, fence := b.statements(data.Body.AsBlock().Statements.Nodes, false)
+	b.returnType = previousReturnType
 	if fence != nil {
 		return nil, fence
 	}
@@ -466,6 +550,121 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			Name:     node.Text(),
 		}, nil
 
+	case ast.KindObjectLiteralExpression:
+		contextualType := b.checker.GetContextualType(node, checker.ContextFlagsNone)
+		if contextualType == nil {
+			return nil, b.fenceWithMessage(node, "unsupported anonymous shape")
+		}
+		valueType, fence := b.graphType(contextualType, node)
+		if fence != nil {
+			return nil, fence
+		}
+		if valueType.Kind != graph.TypeObject {
+			return nil, b.fenceWithMessage(node, "object literal requires one named shape")
+		}
+		shape, ok := b.shapeByID(valueType.Shape)
+		if !ok {
+			return nil, b.fenceWithMessage(node, "object literal shape was not registered")
+		}
+		properties := node.AsObjectLiteralExpression().Properties.Nodes
+		if len(properties) != len(shape.Fields) {
+			return nil, b.fenceWithMessage(node, "object literal fields must match named declaration order")
+		}
+		values := make([]graph.PropertyValue, 0, len(properties))
+		for index, propertyNode := range properties {
+			if propertyNode.Kind != ast.KindPropertyAssignment {
+				return nil, b.fence(propertyNode)
+			}
+			property := propertyNode.AsPropertyAssignment()
+			name := property.Name()
+			if property.Modifiers() != nil || property.PostfixToken != nil || property.Type != nil || name == nil || name.Kind != ast.KindIdentifier || name.Text() != shape.Fields[index].Name {
+				return nil, b.fenceWithMessage(propertyNode, "object literal fields must match named declaration order")
+			}
+			value, fence := b.expression(property.Initializer)
+			if fence != nil {
+				return nil, fence
+			}
+			if !sameType(shape.Fields[index].Type, value.Type) {
+				return nil, b.typeFlowFence(property.Initializer, shape.Fields[index].Type, value.Type)
+			}
+			values = append(values, graph.PropertyValue{Position: b.position(propertyNode), Name: name.Text(), Value: value})
+		}
+		return &graph.Expression{Kind: graph.ExpressionObject, Position: b.position(node), Type: valueType, Properties: values}, nil
+
+	case ast.KindArrayLiteralExpression:
+		contextualType := b.checker.GetContextualType(node, checker.ContextFlagsNone)
+		if contextualType == nil {
+			return nil, b.fenceWithMessage(node, "array literal requires a contextual array type")
+		}
+		valueType, fence := b.graphType(contextualType, node)
+		if fence != nil {
+			return nil, fence
+		}
+		if valueType.Kind != graph.TypeArray || valueType.Element == nil {
+			return nil, b.fenceWithMessage(node, "array literal requires a contextual array type")
+		}
+		elements := make([]*graph.Expression, 0, len(node.AsArrayLiteralExpression().Elements.Nodes))
+		for _, elementNode := range node.AsArrayLiteralExpression().Elements.Nodes {
+			if elementNode.Kind == ast.KindSpreadElement || elementNode.Kind == ast.KindOmittedExpression {
+				return nil, b.fence(elementNode)
+			}
+			element, fence := b.expression(elementNode)
+			if fence != nil {
+				return nil, fence
+			}
+			if !sameType(*valueType.Element, element.Type) {
+				return nil, b.typeFlowFence(elementNode, *valueType.Element, element.Type)
+			}
+			elements = append(elements, element)
+		}
+		return &graph.Expression{Kind: graph.ExpressionArray, Position: b.position(node), Type: valueType, Expressions: elements}, nil
+
+	case ast.KindPropertyAccessExpression:
+		data := node.AsPropertyAccessExpression()
+		name := data.Name()
+		if data.QuestionDotToken != nil || name == nil || name.Kind != ast.KindIdentifier {
+			return nil, b.fence(node)
+		}
+		receiver, fence := b.expression(data.Expression)
+		if fence != nil {
+			return nil, fence
+		}
+		if receiver.Type.Kind == graph.TypeArray {
+			if name.Text() != "length" {
+				return nil, b.fenceWithMessage(name, "unsupported array method or property "+name.Text())
+			}
+			return &graph.Expression{Kind: graph.ExpressionArrayLength, Position: b.position(node), Type: graph.Type{Kind: graph.TypeNumber}, Receiver: receiver, Name: name.Text()}, nil
+		}
+		if receiver.Type.Kind != graph.TypeObject {
+			return nil, b.fence(node)
+		}
+		field, ok := b.shapeField(receiver.Type.Shape, name.Text())
+		if !ok || b.checker.GetSymbolAtLocation(name) == nil {
+			return nil, b.fenceWithMessage(name, "property is not declared on the named shape")
+		}
+		return &graph.Expression{Kind: graph.ExpressionProperty, Position: b.position(node), Type: field.Type, Receiver: receiver, Name: name.Text()}, nil
+
+	case ast.KindElementAccessExpression:
+		data := node.AsElementAccessExpression()
+		if data.QuestionDotToken != nil || data.ArgumentExpression == nil {
+			return nil, b.fence(node)
+		}
+		receiver, fence := b.expression(data.Expression)
+		if fence != nil {
+			return nil, fence
+		}
+		if receiver.Type.Kind != graph.TypeArray || receiver.Type.Element == nil {
+			return nil, b.fenceWithMessage(node, "element access requires an array")
+		}
+		index, fence := b.expression(data.ArgumentExpression)
+		if fence != nil {
+			return nil, fence
+		}
+		if index.Type.Kind != graph.TypeNumber {
+			return nil, b.fenceWithMessage(data.ArgumentExpression, "array index must be a number")
+		}
+		return &graph.Expression{Kind: graph.ExpressionIndex, Position: b.position(node), Type: *receiver.Type.Element, Receiver: receiver, Index: index}, nil
+
 	case ast.KindBinaryExpression:
 		return b.binaryExpression(node)
 
@@ -533,6 +732,14 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			}
 			arguments = append(arguments, argument)
 		}
+		if len(arguments) != len(callee.Type.Parameters) {
+			return nil, b.fenceWithMessage(node, "call argument count does not match supported signature")
+		}
+		for index := range arguments {
+			if !sameType(callee.Type.Parameters[index], arguments[index].Type) {
+				return nil, b.typeFlowFence(data.Arguments.Nodes[index], callee.Type.Parameters[index], arguments[index].Type)
+			}
+		}
 		valueType, fence := b.checkedType(node)
 		if fence != nil {
 			return nil, fence
@@ -582,7 +789,7 @@ func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceErr
 	data := node.AsBinaryExpression()
 	operatorKind := data.OperatorToken.Kind
 	if operator, ok := assignmentOperator(operatorKind); ok {
-		if data.Left.Kind != ast.KindIdentifier {
+		if data.Left.Kind != ast.KindIdentifier && data.Left.Kind != ast.KindPropertyAccessExpression && data.Left.Kind != ast.KindElementAccessExpression {
 			return nil, b.fence(data.Left)
 		}
 		left, fence := b.expression(data.Left)
@@ -639,6 +846,28 @@ func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceErr
 	}, nil
 }
 
+func (b *builder) shapeByID(id graph.ShapeID) (graph.Shape, bool) {
+	for _, shape := range b.shapes {
+		if shape.ID == id {
+			return shape, true
+		}
+	}
+	return graph.Shape{}, false
+}
+
+func (b *builder) shapeField(id graph.ShapeID, name string) (graph.Field, bool) {
+	shape, ok := b.shapeByID(id)
+	if !ok {
+		return graph.Field{}, false
+	}
+	for _, field := range shape.Fields {
+		if field.Name == name {
+			return field, true
+		}
+	}
+	return graph.Field{}, false
+}
+
 func (b *builder) updateExpression(node *ast.Node, operandNode *ast.Node, operatorKind ast.Kind, prefix bool) (*graph.Expression, *fenceError) {
 	operator, ok := updateOperator(operatorKind)
 	if !ok || operandNode.Kind != ast.KindIdentifier {
@@ -686,7 +915,10 @@ func (b *builder) arrowExpression(node *ast.Node) (*graph.Expression, *fenceErro
 	if functionType.Kind != graph.TypeFunction || functionType.Result == nil {
 		return nil, b.fence(node)
 	}
+	previousReturnType := b.returnType
+	b.returnType = functionType.Result
 	body, fence := b.statements(data.Body.AsBlock().Statements.Nodes, false)
+	b.returnType = previousReturnType
 	if fence != nil {
 		return nil, fence
 	}
@@ -715,10 +947,110 @@ func (b *builder) checkedType(node *ast.Node) (graph.Type, *fenceError) {
 	return b.graphType(b.checker.GetTypeAtLocation(node), node)
 }
 
+func (b *builder) ensureShapeDeclaration(node *ast.Node) (graph.ShapeID, *fenceError) {
+	var name *ast.Node
+	switch node.Kind {
+	case ast.KindInterfaceDeclaration:
+		declaration := node.AsInterfaceDeclaration()
+		if declaration.Modifiers() != nil || declaration.TypeParameters != nil || declaration.HeritageClauses != nil {
+			return 0, b.fence(node)
+		}
+		name = declaration.Name()
+	case ast.KindTypeAliasDeclaration:
+		declaration := node.AsTypeAliasDeclaration()
+		if declaration.Modifiers() != nil || declaration.TypeParameters != nil || declaration.Type == nil || declaration.Type.Kind != ast.KindTypeLiteral {
+			return 0, b.fence(node)
+		}
+		name = declaration.Name()
+	default:
+		return 0, b.fence(node)
+	}
+	if name == nil || name.Kind != ast.KindIdentifier {
+		return 0, b.fence(node)
+	}
+	symbol := b.checker.GetSymbolAtLocation(name)
+	if symbol == nil {
+		return 0, b.fenceWithMessage(name, "named shape has no checker symbol")
+	}
+	return b.ensureNamedShape(symbol, node)
+}
+
+func (b *builder) ensureNamedShape(symbol *ast.Symbol, useNode *ast.Node) (graph.ShapeID, *fenceError) {
+	if id, ok := b.shapeIDs[symbol]; ok {
+		if b.shapeBuilding[symbol] {
+			return 0, b.fenceWithMessage(useNode, "unsupported recursive named shape "+symbol.Name)
+		}
+		return id, nil
+	}
+	if len(symbol.Declarations) != 1 {
+		return 0, b.fenceWithMessage(useNode, "named shape must resolve to one declaration")
+	}
+	declaration := symbol.Declarations[0]
+	if ast.GetSourceFileOfNode(declaration) != b.file || (declaration.Kind != ast.KindInterfaceDeclaration && declaration.Kind != ast.KindTypeAliasDeclaration) {
+		return 0, b.fenceWithMessage(useNode, "unsupported anonymous shape")
+	}
+
+	id := graph.ShapeID(len(b.shapeIDs) + 1)
+	b.shapeIDs[symbol] = id
+	b.shapeBuilding[symbol] = true
+
+	var name *ast.Node
+	var members []*ast.Node
+	switch declaration.Kind {
+	case ast.KindInterfaceDeclaration:
+		data := declaration.AsInterfaceDeclaration()
+		if data.Modifiers() != nil || data.TypeParameters != nil || data.HeritageClauses != nil {
+			return 0, b.fence(declaration)
+		}
+		name = data.Name()
+		members = data.Members.Nodes
+	case ast.KindTypeAliasDeclaration:
+		data := declaration.AsTypeAliasDeclaration()
+		if data.Modifiers() != nil || data.TypeParameters != nil || data.Type == nil || data.Type.Kind != ast.KindTypeLiteral {
+			return 0, b.fence(declaration)
+		}
+		name = data.Name()
+		members = data.Type.AsTypeLiteralNode().Members.Nodes
+	}
+
+	fields := make([]graph.Field, 0, len(members))
+	for _, memberNode := range members {
+		if memberNode.Kind != ast.KindPropertySignature {
+			return 0, b.fence(memberNode)
+		}
+		member := memberNode.AsPropertySignatureDeclaration()
+		memberName := member.Name()
+		if member.Modifiers() != nil || member.PostfixToken != nil || member.Initializer != nil || member.Type == nil || memberName == nil || memberName.Kind != ast.KindIdentifier {
+			return 0, b.fence(memberNode)
+		}
+		fieldType, fence := b.graphType(b.checker.GetTypeAtLocation(member.Type), member.Type)
+		if fence != nil {
+			return 0, fence
+		}
+		fields = append(fields, graph.Field{
+			Position: b.position(memberNode),
+			Name:     memberName.Text(),
+			Type:     fieldType,
+		})
+	}
+
+	b.shapeBuilding[symbol] = false
+	b.shapes = append(b.shapes, graph.Shape{
+		ID:       id,
+		Position: b.position(declaration),
+		Name:     name.Text(),
+		Fields:   fields,
+	})
+	return id, nil
+}
+
 func (b *builder) validateTypeNode(node *ast.Node) *fenceError {
 	switch node.Kind {
 	case ast.KindNumberKeyword, ast.KindStringKeyword, ast.KindBooleanKeyword, ast.KindVoidKeyword:
 		return nil
+	case ast.KindTypeReference, ast.KindArrayType:
+		_, fence := b.checkedType(node)
+		return fence
 	case ast.KindFunctionType:
 		data := node.AsFunctionTypeNode()
 		if data.TypeParameters != nil || data.Type == nil {
@@ -756,7 +1088,33 @@ func (b *builder) graphType(value *checker.Type, node *ast.Node) (graph.Type, *f
 		return graph.Type{Kind: graph.TypeVoid}, nil
 	}
 
+	if b.checker.IsArrayType(value) {
+		element := b.checker.GetElementTypeOfArrayType(value)
+		if element == nil {
+			return graph.Type{}, b.fenceWithMessage(node, "array type has no element type")
+		}
+		elementType, fence := b.graphType(element, node)
+		if fence != nil {
+			return graph.Type{}, fence
+		}
+		return graph.Type{Kind: graph.TypeArray, Element: &elementType}, nil
+	}
+
 	signatures := b.checker.GetSignaturesOfType(value, checker.SignatureKindCall)
+	if len(signatures) == 0 {
+		symbol := value.Symbol()
+		if alias := value.Alias(); alias != nil {
+			symbol = alias.Symbol()
+		}
+		if symbol == nil {
+			return graph.Type{}, b.fenceWithMessage(node, "unsupported anonymous shape")
+		}
+		shape, fence := b.ensureNamedShape(symbol, node)
+		if fence != nil {
+			return graph.Type{}, fence
+		}
+		return graph.Type{Kind: graph.TypeObject, Shape: shape}, nil
+	}
 	if len(signatures) != 1 {
 		return graph.Type{}, b.fenceWithMessage(node, "unsupported checked type "+b.checker.TypeToString(value))
 	}
@@ -774,6 +1132,32 @@ func (b *builder) graphType(value *checker.Type, node *ast.Node) (graph.Type, *f
 		return graph.Type{}, fence
 	}
 	return graph.FunctionType(parameterTypes, resultType), nil
+}
+
+func sameType(left graph.Type, right graph.Type) bool {
+	if left.Kind != right.Kind {
+		return false
+	}
+	switch left.Kind {
+	case graph.TypeObject:
+		return left.Shape != 0 && left.Shape == right.Shape
+	case graph.TypeArray:
+		return left.Element != nil && right.Element != nil && sameType(*left.Element, *right.Element)
+	case graph.TypeFunction:
+		if len(left.Parameters) != len(right.Parameters) || left.Result == nil || right.Result == nil || !sameType(*left.Result, *right.Result) {
+			return false
+		}
+		for index := range left.Parameters {
+			if !sameType(left.Parameters[index], right.Parameters[index]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (b *builder) typeFlowFence(node *ast.Node, target graph.Type, source graph.Type) *fenceError {
+	return b.fenceWithMessage(node, fmt.Sprintf("unsupported type flow between distinct named shapes or array element types (%s <- %s)", target.Kind, source.Kind))
 }
 
 func (b *builder) binding(node *ast.Node) (graph.BindingID, *fenceError) {
@@ -973,7 +1357,7 @@ func binaryOperator(kind ast.Kind) (string, bool) {
 
 func validAssignment(operator string, left graph.Type, right graph.Type) bool {
 	if operator == "=" {
-		return left.Kind == right.Kind
+		return sameType(left, right)
 	}
 	if operator == "+=" && left.Kind == graph.TypeString {
 		return right.Kind == graph.TypeString || right.Kind == graph.TypeNumber
@@ -997,7 +1381,7 @@ func validBinary(operator string, left graph.Type, right graph.Type, result grap
 	case "<", "<=", ">", ">=":
 		return left.Kind == graph.TypeNumber && right.Kind == graph.TypeNumber && result.Kind == graph.TypeBoolean
 	case "===", "!==":
-		return left.Kind == right.Kind && (left.Kind == graph.TypeNumber || left.Kind == graph.TypeString || left.Kind == graph.TypeBoolean) && result.Kind == graph.TypeBoolean
+		return sameType(left, right) && (left.Kind == graph.TypeNumber || left.Kind == graph.TypeString || left.Kind == graph.TypeBoolean || left.Kind == graph.TypeObject || left.Kind == graph.TypeArray) && result.Kind == graph.TypeBoolean
 	case "&&", "||":
 		return left.Kind == graph.TypeBoolean && right.Kind == graph.TypeBoolean && result.Kind == graph.TypeBoolean
 	default:

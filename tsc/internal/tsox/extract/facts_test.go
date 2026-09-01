@@ -7,6 +7,7 @@ import (
 
 	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/bundled"
+	"github.com/microsoft/typescript-go/internal/checker"
 	"github.com/microsoft/typescript-go/internal/compiler"
 	"github.com/microsoft/typescript-go/internal/core"
 	"github.com/microsoft/typescript-go/internal/scanner"
@@ -121,7 +122,96 @@ func TestNodeTokenPositionMapsToECMALineAndUTF16Column(t *testing.T) {
 	}
 }
 
+func TestCheckerResolvesNamedShapesAccessesArraysAndForOf(t *testing.T) {
+	t.Parallel()
+
+	file, typeChecker := checkedFileAndChecker(t, `interface Point { x: number; y: number; }
+type Box = { value: Point };
+const point: Point = { x: 1, y: 2 };
+const box: Box = { value: point };
+const x: number = point.x;
+const rows: number[][] = [[1, 2]];
+const first: number = rows[0][0];
+for (const value of rows[0]) { console.log(value); }`)
+
+	pointDeclaration := file.Statements.Nodes[0]
+	pointName := pointDeclaration.AsInterfaceDeclaration().Name()
+	pointSymbol := typeChecker.GetSymbolAtLocation(pointName)
+	if pointSymbol == nil {
+		t.Fatal("interface name has no symbol")
+	}
+	pointVariable := variableNameAt(t, file, 2)
+	pointType := typeChecker.GetTypeAtLocation(pointVariable)
+	if pointType.Symbol() != pointSymbol {
+		t.Fatalf("Point value type symbol: got %p, want interface symbol %p", pointType.Symbol(), pointSymbol)
+	}
+	if len(pointSymbol.Declarations) != 1 || pointSymbol.Declarations[0] != pointDeclaration {
+		t.Fatalf("Point symbol declarations: got %v, want the interface declaration", pointSymbol.Declarations)
+	}
+
+	boxDeclaration := file.Statements.Nodes[1]
+	boxSymbol := typeChecker.GetSymbolAtLocation(boxDeclaration.AsTypeAliasDeclaration().Name())
+	boxType := typeChecker.GetTypeAtLocation(variableNameAt(t, file, 3))
+	if boxType.Alias() == nil || boxType.Alias().Symbol() != boxSymbol {
+		t.Fatalf("Box value type alias symbol does not resolve to its declaration")
+	}
+
+	xInitializer := variableInitializerAt(t, file, 4)
+	property := xInitializer.AsPropertyAccessExpression()
+	resolvedProperty := typeChecker.GetSymbolAtLocation(property.Name())
+	if resolvedProperty == nil || resolvedProperty != typeChecker.GetPropertyOfType(pointType, "x") {
+		t.Fatal("property access name did not resolve to Point.x")
+	}
+
+	rowsType := typeChecker.GetTypeAtLocation(variableNameAt(t, file, 5))
+	if !typeChecker.IsArrayType(rowsType) {
+		t.Fatalf("rows type is not an array: %s", typeChecker.TypeToString(rowsType))
+	}
+	rowType := typeChecker.GetElementTypeOfArrayType(rowsType)
+	if rowType == nil || !typeChecker.IsArrayType(rowType) {
+		t.Fatalf("rows element is not an array: %v", rowType)
+	}
+	elementType := typeChecker.GetElementTypeOfArrayType(rowType)
+	if elementType == nil || typeChecker.TypeToString(elementType) != "number" {
+		t.Fatalf("nested array element: got %v, want number", elementType)
+	}
+
+	firstInitializer := variableInitializerAt(t, file, 6)
+	if got := typeChecker.TypeToString(typeChecker.GetTypeAtLocation(firstInitializer)); got != "number" {
+		t.Fatalf("element access type: got %q, want number", got)
+	}
+	forOf := file.Statements.Nodes[7].AsForInOrOfStatement()
+	loopName := forOf.Initializer.AsVariableDeclarationList().Declarations.Nodes[0].AsVariableDeclaration().Name()
+	if got := typeChecker.TypeToString(typeChecker.GetTypeAtLocation(loopName)); got != "number" {
+		t.Fatalf("for-of binding type: got %q, want number", got)
+	}
+}
+
+func variableNameAt(t *testing.T, file *ast.SourceFile, statement int) *ast.Node {
+	t.Helper()
+	declarations := file.Statements.Nodes[statement].AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes
+	if len(declarations) != 1 {
+		t.Fatalf("statement %d has %d declarations, want 1", statement, len(declarations))
+	}
+	return declarations[0].AsVariableDeclaration().Name()
+}
+
+func variableInitializerAt(t *testing.T, file *ast.SourceFile, statement int) *ast.Node {
+	t.Helper()
+	declarations := file.Statements.Nodes[statement].AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes
+	if len(declarations) != 1 || declarations[0].AsVariableDeclaration().Initializer == nil {
+		t.Fatalf("statement %d does not have one initialized declaration", statement)
+	}
+	return declarations[0].AsVariableDeclaration().Initializer
+}
+
 func checkedSourceFile(t *testing.T, source string) *ast.SourceFile {
+	t.Helper()
+	file, _ := checkedFileAndChecker(t, source)
+	return file
+}
+
+func checkedFileAndChecker(t *testing.T, source string) (*ast.SourceFile, *checker.Checker) {
 	t.Helper()
 
 	fs := bundled.WrapFS(vfstest.FromMap(map[string]string{
@@ -154,5 +244,7 @@ func checkedSourceFile(t *testing.T, source string) *ast.SourceFile {
 		t.Fatal("expected no semantic diagnostics")
 	}
 
-	return file
+	typeChecker, done := program.GetTypeChecker(context.Background())
+	t.Cleanup(done)
+	return file, typeChecker
 }

@@ -259,6 +259,111 @@ console.log(next());`)
 	}
 }
 
+func TestExtractAcceptsNamedObjectsDenseArraysMutationAndIdentity(t *testing.T) {
+	t.Parallel()
+
+	result := Extract(extractSourcePath, `interface Point { x: number; y: number; }
+type Box = { point: Point; rows: number[][] };
+function mutate(point: Point, values: number[]): void {
+  point.x = values[0];
+  values[1] = point.y;
+}
+const point: Point = { x: 1, y: 2 };
+const alias: Point = point;
+const values: number[] = [3, 4];
+const box: Box = { point: point, rows: [[5, 6]] };
+mutate(alias, values);
+console.log(point.x);
+console.log(values[1]);
+console.log(box.point.y);
+console.log(box.rows[0][1]);
+console.log(values.length);
+console.log(point === alias);
+for (const value of values) { console.log(value); }`)
+	if result.Program == nil || len(result.Diagnostics) != 0 {
+		t.Fatalf("object/array extraction failed: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+	if len(result.Program.Shapes) != 2 {
+		t.Fatalf("shapes: got %d, want 2 (%#v)", len(result.Program.Shapes), result.Program.Shapes)
+	}
+	shapeByName := make(map[string]graph.Shape)
+	for _, shape := range result.Program.Shapes {
+		shapeByName[shape.Name] = shape
+	}
+	pointShape, ok := shapeByName["Point"]
+	if !ok || len(pointShape.Fields) != 2 || pointShape.Fields[0].Name != "x" || pointShape.Fields[1].Name != "y" {
+		t.Fatalf("Point shape does not preserve declaration fields: %#v", pointShape)
+	}
+	boxShape, ok := shapeByName["Box"]
+	if !ok || len(boxShape.Fields) != 2 || boxShape.Fields[0].Type.Shape != pointShape.ID {
+		t.Fatalf("Box shape does not reference Point identity: %#v", boxShape)
+	}
+	if boxShape.Fields[1].Type.Kind != graph.TypeArray || boxShape.Fields[1].Type.Element == nil || boxShape.Fields[1].Type.Element.Kind != graph.TypeArray {
+		t.Fatalf("Box.rows is not a nested array type: %#v", boxShape.Fields[1].Type)
+	}
+
+	statements := graphStatements(result.Program)
+	if !statements[graph.StatementForOf] {
+		t.Fatal("graph is missing for-of statement")
+	}
+	expressions, operators := graphExpressions(result.Program)
+	for _, kind := range []graph.ExpressionKind{
+		graph.ExpressionObject,
+		graph.ExpressionProperty,
+		graph.ExpressionArray,
+		graph.ExpressionIndex,
+		graph.ExpressionArrayLength,
+		graph.ExpressionAssignment,
+	} {
+		if !expressions[kind] {
+			t.Errorf("graph is missing expression kind %q", kind)
+		}
+	}
+	if !operators["==="] {
+		t.Error("graph is missing object identity operator")
+	}
+}
+
+func TestExtractRejectsObjectAndArrayFences(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		source    string
+		construct string
+	}{
+		{name: "anonymous shape", source: `const value = { x: 1 }; console.log(value.x);`, construct: "anonymous shape"},
+		{
+			name: "cross declaration flow",
+			source: `interface Wide { x: number; y: number; }
+interface Narrow { x: number; }
+const wide: Wide = { x: 1, y: 2 };
+const narrow: Narrow = wide;`,
+			construct: "distinct named shapes",
+		},
+		{name: "recursive named shape", source: `interface Link { value: number; next: Link; }`, construct: "recursive named shape"},
+		{name: "array method", source: `const values: number[] = [1]; values.push(2);`, construct: "push"},
+		{name: "object print", source: `interface Point { x: number; } const point: Point = { x: 1 }; console.log(point);`, construct: "console.log argument"},
+		{name: "array print", source: `const values: number[] = [1]; console.log(values);`, construct: "console.log argument"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := Extract(extractSourcePath, tt.source)
+			if result.Program != nil {
+				t.Fatalf("unsupported %s produced a graph: %#v", tt.construct, result.Program)
+			}
+			if len(result.Diagnostics) != 1 {
+				t.Fatalf("diagnostics for %s: got %d, want 1 (%v)", tt.construct, len(result.Diagnostics), result.Diagnostics)
+			}
+			if !diagnosticNamesConstruct(result.Diagnostics[0], tt.construct) {
+				t.Errorf("diagnostic does not name %q: %#v", tt.construct, result.Diagnostics[0])
+			}
+		})
+	}
+}
+
 func TestExtractUsesModuleScopeAlongsideBundledDOMDeclarations(t *testing.T) {
 	t.Parallel()
 
@@ -363,15 +468,9 @@ func TestExtractRejectsUnsupportedConstructAtFirstFence(t *testing.T) {
 		position  graph.Position
 	}{
 		{
-			name:      "interface",
-			source:    "const before = 1;\ninterface User { value: number }\nconst after = 2;",
-			construct: "interface",
-			position:  graph.Position{Line: 2, Column: 1},
-		},
-		{
-			name:      "object literal",
+			name:      "anonymous object literal",
 			source:    "const before = 1;\nlet x = {};",
-			construct: "object",
+			construct: "anonymous shape",
 			position:  graph.Position{Line: 2, Column: 9},
 		},
 		{
@@ -508,11 +607,16 @@ func allGraphExpressions(program *graph.Program) []*graph.Expression {
 		visitExpression(expression.Right)
 		visitExpression(expression.Operand)
 		visitExpression(expression.Callee)
+		visitExpression(expression.Receiver)
+		visitExpression(expression.Index)
 		for _, argument := range expression.Arguments {
 			visitExpression(argument)
 		}
 		for _, expressionPart := range expression.Expressions {
 			visitExpression(expressionPart)
+		}
+		for _, property := range expression.Properties {
+			visitExpression(property.Value)
 		}
 		visitStatements(expression.Body)
 	}

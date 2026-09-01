@@ -8,12 +8,17 @@ import "fmt"
 // Program is the checked subset program consumed by the Rust emitter.
 type Program struct {
 	SourcePath string
+	Shapes     []Shape
 	Statements []*Statement
 }
 
 // BindingID preserves checker-resolved lexical identity without retaining a
 // compiler symbol pointer. Zero means that an expression has no binding.
 type BindingID uint32
+
+// ShapeID identifies one checker-resolved named interface or type alias.
+// Zero is reserved for values that have no supported named shape.
+type ShapeID uint32
 
 // Position is a one-based source position suitable for diagnostics.
 type Position struct {
@@ -30,6 +35,8 @@ const (
 	TypeBoolean  TypeKind = "boolean"
 	TypeFunction TypeKind = "function"
 	TypeVoid     TypeKind = "void"
+	TypeObject   TypeKind = "object"
+	TypeArray    TypeKind = "array"
 )
 
 // Type is a checked value type. Parameters and Result are populated only for
@@ -38,6 +45,24 @@ type Type struct {
 	Kind       TypeKind
 	Parameters []Type
 	Result     *Type
+	Shape      ShapeID
+	Element    *Type
+}
+
+// Shape is one checker-resolved named object declaration. Fields retain
+// declaration order.
+type Shape struct {
+	ID       ShapeID
+	Position Position
+	Name     string
+	Fields   []Field
+}
+
+// Field is one required property in a named shape.
+type Field struct {
+	Position Position
+	Name     string
+	Type     Type
 }
 
 // FunctionType constructs the function shape used by declarations, arrows,
@@ -64,6 +89,7 @@ const (
 	StatementIf         StatementKind = "if"
 	StatementWhile      StatementKind = "while"
 	StatementFor        StatementKind = "for"
+	StatementForOf      StatementKind = "for-of"
 	StatementFunction   StatementKind = "function"
 	StatementReturn     StatementKind = "return"
 )
@@ -93,18 +119,30 @@ type Statement struct {
 type ExpressionKind string
 
 const (
-	ExpressionNumber     ExpressionKind = "number"
-	ExpressionString     ExpressionKind = "string"
-	ExpressionBoolean    ExpressionKind = "boolean"
-	ExpressionIdentifier ExpressionKind = "identifier"
-	ExpressionBinary     ExpressionKind = "binary"
-	ExpressionUnary      ExpressionKind = "unary"
-	ExpressionAssignment ExpressionKind = "assignment"
-	ExpressionUpdate     ExpressionKind = "update"
-	ExpressionCall       ExpressionKind = "call"
-	ExpressionTemplate   ExpressionKind = "template"
-	ExpressionArrow      ExpressionKind = "arrow"
+	ExpressionNumber      ExpressionKind = "number"
+	ExpressionString      ExpressionKind = "string"
+	ExpressionBoolean     ExpressionKind = "boolean"
+	ExpressionIdentifier  ExpressionKind = "identifier"
+	ExpressionBinary      ExpressionKind = "binary"
+	ExpressionUnary       ExpressionKind = "unary"
+	ExpressionAssignment  ExpressionKind = "assignment"
+	ExpressionUpdate      ExpressionKind = "update"
+	ExpressionCall        ExpressionKind = "call"
+	ExpressionTemplate    ExpressionKind = "template"
+	ExpressionArrow       ExpressionKind = "arrow"
+	ExpressionObject      ExpressionKind = "object"
+	ExpressionProperty    ExpressionKind = "property"
+	ExpressionArray       ExpressionKind = "array"
+	ExpressionIndex       ExpressionKind = "index"
+	ExpressionArrayLength ExpressionKind = "array-length"
 )
+
+// PropertyValue is one declaration-named object-literal field value.
+type PropertyValue struct {
+	Position Position
+	Name     string
+	Value    *Expression
+}
 
 // Expression stores only fields used by its Kind. Chunks has exactly one more
 // entry than Expressions for a template expression.
@@ -129,6 +167,9 @@ type Expression struct {
 	Parameters  []Parameter
 	ReturnType  Type
 	Body        []*Statement
+	Receiver    *Expression
+	Index       *Expression
+	Properties  []PropertyValue
 }
 
 // Diagnostic is the single clean fence returned when extraction cannot
