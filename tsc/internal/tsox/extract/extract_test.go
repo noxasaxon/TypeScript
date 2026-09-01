@@ -358,8 +358,12 @@ const narrow: Narrow = wide;`,
 			if len(result.Diagnostics) != 1 {
 				t.Fatalf("diagnostics for %s: got %d, want 1 (%v)", tt.construct, len(result.Diagnostics), result.Diagnostics)
 			}
-			if !diagnosticNamesConstruct(result.Diagnostics[0], tt.construct) {
-				t.Errorf("diagnostic does not name %q: %#v", tt.construct, result.Diagnostics[0])
+			diagnostic := result.Diagnostics[0]
+			if diagnostic.Position.Line < 1 || diagnostic.Position.Column < 1 {
+				t.Errorf("diagnostic has no source position: %#v", diagnostic)
+			}
+			if !diagnosticNamesConstruct(diagnostic, tt.construct) {
+				t.Errorf("diagnostic does not name %q: %#v", tt.construct, diagnostic)
 			}
 		})
 	}

@@ -189,20 +189,25 @@ for (const value of rows[0]) { console.log(value); }`)
 
 func variableNameAt(t *testing.T, file *ast.SourceFile, statement int) *ast.Node {
 	t.Helper()
-	declarations := file.Statements.Nodes[statement].AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes
-	if len(declarations) != 1 {
-		t.Fatalf("statement %d has %d declarations, want 1", statement, len(declarations))
-	}
-	return declarations[0].AsVariableDeclaration().Name()
+	return variableDeclarationAt(t, file, statement).Name()
 }
 
 func variableInitializerAt(t *testing.T, file *ast.SourceFile, statement int) *ast.Node {
 	t.Helper()
-	declarations := file.Statements.Nodes[statement].AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes
-	if len(declarations) != 1 || declarations[0].AsVariableDeclaration().Initializer == nil {
-		t.Fatalf("statement %d does not have one initialized declaration", statement)
+	declaration := variableDeclarationAt(t, file, statement)
+	if declaration.Initializer == nil {
+		t.Fatalf("statement %d does not have an initialized declaration", statement)
 	}
-	return declarations[0].AsVariableDeclaration().Initializer
+	return declaration.Initializer
+}
+
+func variableDeclarationAt(t *testing.T, file *ast.SourceFile, statement int) *ast.VariableDeclaration {
+	t.Helper()
+	declarations := file.Statements.Nodes[statement].AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes
+	if len(declarations) != 1 {
+		t.Fatalf("statement %d has %d declarations, want 1", statement, len(declarations))
+	}
+	return declarations[0].AsVariableDeclaration()
 }
 
 func checkedSourceFile(t *testing.T, source string) *ast.SourceFile {
