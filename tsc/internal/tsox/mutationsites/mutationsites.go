@@ -4,6 +4,7 @@ package mutationsites
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/microsoft/typescript-go/internal/ast"
@@ -197,6 +198,16 @@ func (b *builder) typeIdentity(value *checker.Type) mutation.TypeIdentity {
 		name := text
 		if name != "object" && !strings.HasPrefix(name, "{") && !strings.HasPrefix(name, "(") {
 			identity.Named = name
+		} else if symbol := value.Symbol(); symbol != nil {
+			for _, declaration := range symbol.Declarations {
+				if ast.GetSourceFileOfNode(declaration) == b.file {
+					identity.Named = fmt.Sprintf("anonymous@%d:%d", scanner.GetTokenPosOfNode(declaration, b.file, false), declaration.End())
+					break
+				}
+			}
+		}
+		if identity.Named == "" {
+			identity.Named = "anonymous:" + text
 		}
 	}
 	return identity

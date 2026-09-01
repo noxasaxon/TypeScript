@@ -119,6 +119,26 @@ empty = noop();`)
 	}
 }
 
+func TestMutationSitesKeepsDistinctAnonymousObjectIdentitiesConservative(t *testing.T) {
+	t.Parallel()
+
+	result := tsox.MutationSites("anonymous.ts", `const left = { value: 1 };
+const right = { value: 2 };
+console.log(left.value + right.value);`)
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("MutationSites diagnostics: %v", result.Diagnostics)
+	}
+	identities := make(map[string]mutation.TypeIdentity)
+	for _, binding := range result.Bindings {
+		if binding.Name == "left" || binding.Name == "right" {
+			identities[binding.Name] = binding.Type
+		}
+	}
+	if identities["left"].Kind != "object" || identities["right"].Kind != "object" || identities["left"].Named == "" || identities["left"] == identities["right"] {
+		t.Fatalf("anonymous identities are not conservative: %#v", identities)
+	}
+}
+
 func assertText(t *testing.T, source string, span mutation.Span, want string) {
 	t.Helper()
 	if got := source[span.Start:span.End]; got != want {
