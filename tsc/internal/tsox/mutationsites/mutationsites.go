@@ -96,7 +96,7 @@ func (b *builder) visit(node *ast.Node) bool {
 
 func (b *builder) recordIdentifier(node *ast.Node) {
 	symbol := b.checker.GetSymbolAtLocation(node)
-	if symbol == nil || symbol.ValueDeclaration == nil || ast.GetSourceFileOfNode(symbol.ValueDeclaration) != b.file {
+	if !b.runtimeBinding(symbol) {
 		return
 	}
 	binding := b.ensureBinding(symbol, node)
@@ -137,7 +137,7 @@ func (b *builder) recordCall(node *ast.Node) {
 	for index, argumentNode := range call.Arguments.Nodes {
 		argument := mutation.Argument{Span: b.span(argumentNode), Type: b.typeIdentity(b.checker.GetTypeAtLocation(argumentNode))}
 		if ast.IsIdentifier(argumentNode) {
-			if symbol := b.checker.GetSymbolAtLocation(argumentNode); symbol != nil {
+			if symbol := b.checker.GetSymbolAtLocation(argumentNode); b.runtimeBinding(symbol) {
 				argument.Binding = b.id(symbol)
 			}
 		}
@@ -172,7 +172,8 @@ func (b *builder) typeIdentity(value *checker.Type) mutation.TypeIdentity {
 		return mutation.TypeIdentity{}
 	}
 	flags := value.Flags()
-	kind := b.checker.TypeToString(value)
+	text := b.checker.TypeToString(value)
+	kind := text
 	switch {
 	case flags&checker.TypeFlagsNumberLike != 0:
 		kind = "number"
@@ -182,17 +183,35 @@ func (b *builder) typeIdentity(value *checker.Type) mutation.TypeIdentity {
 		kind = "boolean"
 	case flags&checker.TypeFlagsVoidLike != 0:
 		kind = "void"
+	case b.checker.IsArrayType(value):
+		kind = "array"
+	case len(b.checker.GetSignaturesOfType(value, checker.SignatureKindCall)) != 0:
+		kind = "function"
 	case flags&checker.TypeFlagsObject != 0:
 		kind = "object"
 	}
 	identity := mutation.TypeIdentity{Kind: kind}
-	if kind == "object" {
-		name := b.checker.TypeToString(value)
+	if kind == "array" || kind == "function" {
+		identity.Named = text
+	} else if kind == "object" {
+		name := text
 		if name != "object" && !strings.HasPrefix(name, "{") && !strings.HasPrefix(name, "(") {
 			identity.Named = name
 		}
 	}
 	return identity
+}
+
+func (b *builder) runtimeBinding(symbol *ast.Symbol) bool {
+	if symbol == nil || symbol.ValueDeclaration == nil || ast.GetSourceFileOfNode(symbol.ValueDeclaration) != b.file {
+		return false
+	}
+	switch symbol.ValueDeclaration.Kind {
+	case ast.KindVariableDeclaration, ast.KindParameter, ast.KindFunctionDeclaration:
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *builder) span(node *ast.Node) mutation.Span {

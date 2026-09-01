@@ -70,6 +70,39 @@ func TestMutationSitesReturnsCheckerDiagnosticsWithoutPartialSites(t *testing.T)
 	}
 }
 
+func TestMutationSitesKeepsFunctionArrayAndNamedObjectIdentitiesDistinct(t *testing.T) {
+	t.Parallel()
+
+	source := `interface Box { value: number; }
+function combine(callback: () => number, values: number[], box: Box): number {
+  return callback() + values[0] + box.value;
+}
+const callback = (): number => { return 1; };
+const values: number[] = [2];
+const box: Box = { value: 3 };
+console.log(combine(callback, values, box));`
+	result := tsox.MutationSites("types.ts", source)
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("MutationSites diagnostics: %v", result.Diagnostics)
+	}
+	var call mutation.CallSite
+	for _, candidate := range result.Calls {
+		if len(candidate.Arguments) == 3 {
+			call = candidate
+			break
+		}
+	}
+	want := []mutation.TypeIdentity{{Kind: "function", Named: "() => number"}, {Kind: "array", Named: "number[]"}, {Kind: "object", Named: "Box"}}
+	if !reflect.DeepEqual(call.ParameterTypes, want) {
+		t.Fatalf("parameter identities: got %#v, want %#v", call.ParameterTypes, want)
+	}
+	for _, binding := range result.Bindings {
+		if binding.Name == "Box" || binding.Name == "value" || binding.Name == "log" {
+			t.Fatalf("non-runtime symbol leaked into bindings: %#v", binding)
+		}
+	}
+}
+
 func assertText(t *testing.T, source string, span mutation.Span, want string) {
 	t.Helper()
 	if got := source[span.Start:span.End]; got != want {
