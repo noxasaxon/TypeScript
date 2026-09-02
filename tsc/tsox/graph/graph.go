@@ -128,6 +128,7 @@ const (
 	ExpressionAssignment  ExpressionKind = "assignment"
 	ExpressionUpdate      ExpressionKind = "update"
 	ExpressionCall        ExpressionKind = "call"
+	ExpressionMethodCall  ExpressionKind = "method-call"
 	ExpressionTemplate    ExpressionKind = "template"
 	ExpressionArrow       ExpressionKind = "arrow"
 	ExpressionObject      ExpressionKind = "object"

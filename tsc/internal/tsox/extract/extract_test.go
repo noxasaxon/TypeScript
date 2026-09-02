@@ -371,7 +371,7 @@ const narrow: Narrow = wide;`,
 			construct: "distinct named shapes",
 		},
 		{name: "recursive named shape", source: `interface Link { value: number; next: Link; }`, construct: "recursive named shape"},
-		{name: "array method", source: `const values: number[] = [1]; values.push(2);`, construct: "push"},
+		{name: "array method", source: `const values: number[] = [1]; values.pop();`, construct: "pop"},
 		{name: "compound composite assignment", source: `interface Point { x: number; } const point: Point = { x: 1 }; point.x += 1;`, construct: "compound composite assignment"},
 		{name: "object print", source: `interface Point { x: number; } const point: Point = { x: 1 }; console.log(point);`, construct: "console.log argument"},
 		{name: "array print", source: `const values: number[] = [1]; console.log(values);`, construct: "console.log argument"},
@@ -393,6 +393,47 @@ const narrow: Narrow = wide;`,
 			}
 			if !diagnosticNamesConstruct(diagnostic, tt.construct) {
 				t.Errorf("diagnostic does not name %q: %#v", tt.construct, diagnostic)
+			}
+		})
+	}
+}
+
+func TestExtractAcceptsArrayMethodCalls(t *testing.T) {
+	t.Parallel()
+	result := Extract(extractSourcePath, `const values: number[] = [1, 2, 3];
+const pushed: number = values.push(4);
+const unshifted: number = values.unshift(0);
+const found: number = values.indexOf(2, -2);
+const present: boolean = values.includes(3);
+const copy: number[] = values.slice(-3.5, 4);`)
+	if result.Program == nil || len(result.Diagnostics) != 0 {
+		t.Fatalf("array method extraction failed: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+	wants := map[string]graph.TypeKind{"pushed": graph.TypeNumber, "unshifted": graph.TypeNumber, "found": graph.TypeNumber, "present": graph.TypeBoolean, "copy": graph.TypeArray}
+	for name, wantType := range wants {
+		value := variableStatement(t, result.Program, name)
+		if value.Value == nil || value.Value.Kind != graph.ExpressionMethodCall || value.Value.Type.Kind != wantType {
+			t.Errorf("%s initializer: got %#v, want method call returning %s", name, value.Value, wantType)
+		}
+		if value.Value.Receiver == nil || value.Value.Name == "" {
+			t.Errorf("%s method call lacks receiver or method name: %#v", name, value.Value)
+		}
+	}
+}
+
+func TestExtractFencesUnsupportedArrayMethodsAtTheMethodName(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{"pop", "shift", "reverse"} {
+		method := method
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+			result := Extract(extractSourcePath, "const values: number[] = [1];\nvalues."+method+"();")
+			if result.Program != nil || len(result.Diagnostics) != 1 {
+				t.Fatalf("unsupported method result: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+			}
+			diagnostic := result.Diagnostics[0]
+			if diagnostic.Position != (graph.Position{Line: 2, Column: 8}) || !diagnosticNamesConstruct(diagnostic, method) {
+				t.Fatalf("diagnostic: got %#v, want %s at 2:8", diagnostic, method)
 			}
 		})
 	}

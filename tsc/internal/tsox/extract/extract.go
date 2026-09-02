@@ -714,6 +714,9 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		if data.QuestionDotToken != nil || data.TypeArguments != nil {
 			return nil, b.fence(node)
 		}
+		if data.Expression.Kind == ast.KindPropertyAccessExpression {
+			return b.arrayMethodCall(node)
+		}
 		if data.Expression.Kind == ast.KindCallExpression {
 			return nil, b.fenceWithMessage(data.Expression, "unsupported non-identifier call target")
 		}
@@ -789,6 +792,58 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		return b.expression(node.AsParenthesizedExpression().Expression)
 	}
 	return nil, b.fence(node)
+}
+
+func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceError) {
+	call := node.AsCallExpression()
+	accessNode := call.Expression
+	access := accessNode.AsPropertyAccessExpression()
+	nameNode := access.Name()
+	if access.QuestionDotToken != nil || nameNode == nil || nameNode.Kind != ast.KindIdentifier {
+		return nil, b.fence(accessNode)
+	}
+	receiver, fence := b.expression(access.Expression)
+	if fence != nil {
+		return nil, fence
+	}
+	if receiver.Type.Kind != graph.TypeArray || receiver.Type.Element == nil {
+		return nil, b.fence(accessNode)
+	}
+	method := nameNode.Text()
+	minArgs, maxArgs := 0, 0
+	switch method {
+	case "push", "unshift":
+		minArgs, maxArgs = 1, 1
+	case "indexOf", "includes":
+		minArgs, maxArgs = 1, 2
+	case "slice":
+		minArgs, maxArgs = 0, 2
+	default:
+		return nil, b.fenceDiagnostic(nameNode, "ArrayMethodCall", "unsupported array method "+method)
+	}
+	if len(call.Arguments.Nodes) < minArgs || len(call.Arguments.Nodes) > maxArgs {
+		return nil, b.fenceWithMessage(node, "array method argument count does not match supported signature")
+	}
+	arguments := make([]*graph.Expression, 0, len(call.Arguments.Nodes))
+	for index, argumentNode := range call.Arguments.Nodes {
+		argument, argumentFence := b.expression(argumentNode)
+		if argumentFence != nil {
+			return nil, argumentFence
+		}
+		want := graph.Type{Kind: graph.TypeNumber}
+		if method != "slice" && index == 0 {
+			want = *receiver.Type.Element
+		}
+		if !sameType(want, argument.Type) {
+			return nil, b.typeFlowFence(argumentNode, want, argument.Type)
+		}
+		arguments = append(arguments, argument)
+	}
+	valueType, typeFence := b.checkedType(node)
+	if typeFence != nil {
+		return nil, typeFence
+	}
+	return &graph.Expression{Kind: graph.ExpressionMethodCall, Position: b.position(node), Type: valueType, Receiver: receiver, Name: method, Arguments: arguments}, nil
 }
 
 func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceError) {
