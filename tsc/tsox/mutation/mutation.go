@@ -35,7 +35,7 @@ type CallSite struct {
 }
 
 // Binding describes a checker-resolved source binding and every reference to
-// it. Declaration and Initializer are zero spans for non-variable bindings.
+// it. Initializer is a zero span for non-variable bindings.
 type Binding struct {
 	ID          uint32
 	Name        string
@@ -46,9 +46,30 @@ type Binding struct {
 	Uses        []Span
 }
 
+// LiteralSlot describes one replaceable value inside a literal. Field is
+// populated for object-literal properties and empty for array elements.
+type LiteralSlot struct {
+	Span  Span
+	Type  TypeIdentity
+	Field string
+}
+
+// LiteralSite describes one checked object or array literal and its
+// containing statement. Insertion is the byte position where an array append
+// is inserted; it is zero for object literals.
+type LiteralSite struct {
+	Span        Span
+	Statement   Span
+	Kind        string
+	Slots       []LiteralSlot
+	ElementType TypeIdentity
+	Insertion   int
+}
+
 // Result contains either complete checked sites or checker diagnostics.
 type Result struct {
 	Calls       []CallSite
+	Literals    []LiteralSite
 	Bindings    []Binding
 	Identifiers []string
 	Diagnostics []graph.Diagnostic

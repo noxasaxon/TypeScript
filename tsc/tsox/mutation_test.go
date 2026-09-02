@@ -2,6 +2,7 @@ package tsox_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/typescript-go/tsox"
@@ -136,6 +137,71 @@ console.log(left.value + right.value);`)
 	}
 	if identities["left"].Kind != "object" || identities["right"].Kind != "object" || identities["left"].Named == "" || identities["left"] == identities["right"] {
 		t.Fatalf("anonymous identities are not conservative: %#v", identities)
+	}
+}
+
+func TestMutationSitesReturnsLiteralSlotsWithContextualTypes(t *testing.T) {
+	t.Parallel()
+
+	source := `interface Handle { value: number; }
+interface Holder { item: Handle; }
+function wrap(parameter: Handle): Holder {
+  const local: Handle = parameter;
+  const holder: Holder = { item: { value: 1 } };
+  const populated: Handle[] = [{ value: 2 }];
+  const empty: Handle[] = [];
+  return holder;
+}`
+	result := tsox.MutationSites("literals.ts", source)
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("MutationSites diagnostics: %v", result.Diagnostics)
+	}
+	if got, want := len(result.Literals), 5; got != want {
+		t.Fatalf("literal sites: got %d, want %d: %#v", got, want, result.Literals)
+	}
+
+	holder := result.Literals[0]
+	assertText(t, source, holder.Span, "{ item: { value: 1 } }")
+	assertText(t, source, holder.Statement, "const holder: Holder = { item: { value: 1 } };")
+	if holder.Kind != "object" || len(holder.Slots) != 1 || holder.Slots[0].Field != "item" {
+		t.Fatalf("holder literal: got %#v", holder)
+	}
+	assertText(t, source, holder.Slots[0].Span, "{ value: 1 }")
+	if got, want := holder.Slots[0].Type, (mutation.TypeIdentity{Kind: "object", Named: "Handle"}); got != want {
+		t.Fatalf("holder item contextual identity: got %#v, want %#v", got, want)
+	}
+
+	populated := result.Literals[2]
+	if populated.Kind != "array" || len(populated.Slots) != 1 {
+		t.Fatalf("populated array literal: got %#v", populated)
+	}
+	assertText(t, source, populated.Slots[0].Span, "{ value: 2 }")
+	if got, want := populated.ElementType, (mutation.TypeIdentity{Kind: "object", Named: "Handle"}); got != want || populated.Slots[0].Type != want {
+		t.Fatalf("populated element contextual identity: got element=%#v slot=%#v, want %#v", got, populated.Slots[0].Type, want)
+	}
+	if got, want := source[populated.Insertion:populated.Insertion], ""; got != want || populated.Insertion != populated.Slots[0].Span.End {
+		t.Fatalf("populated insertion: got %d, want slot end %d", populated.Insertion, populated.Slots[0].Span.End)
+	}
+
+	empty := result.Literals[4]
+	if empty.Kind != "array" || len(empty.Slots) != 0 || empty.Insertion <= empty.Span.Start || empty.Insertion >= empty.Span.End {
+		t.Fatalf("empty array literal: got %#v", empty)
+	}
+	if source[empty.Insertion-1:empty.Insertion+1] != "[]" {
+		t.Fatalf("empty insertion is not between brackets: %d", empty.Insertion)
+	}
+
+	declarations := make(map[string]string)
+	for _, binding := range result.Bindings {
+		if binding.Name == "parameter" || binding.Name == "wrap" {
+			declarations[binding.Name] = source[binding.Declaration.Start:binding.Declaration.End]
+		}
+	}
+	if declarations["parameter"] != "parameter: Handle" {
+		t.Fatalf("parameter declaration span: got %q", declarations["parameter"])
+	}
+	if !strings.HasPrefix(declarations["wrap"], "function wrap") || !strings.HasSuffix(declarations["wrap"], "}") {
+		t.Fatalf("function declaration span: got %q", declarations["wrap"])
 	}
 }
 

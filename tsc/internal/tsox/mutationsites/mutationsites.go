@@ -22,7 +22,7 @@ import (
 
 const virtualMainPath = "/src/main.ts"
 
-// Extract checks source and returns all call-interaction mutation sites.
+// Extract checks source and returns all mutation sites.
 func Extract(sourcePath string, source string) mutation.Result {
 	if sourcePath == "" {
 		sourcePath = "main.ts"
@@ -52,7 +52,7 @@ func Extract(sourcePath string, source string) mutation.Result {
 
 	b := builder{source: source, file: file, checker: typeChecker, ids: make(map[*ast.Symbol]uint32), bindings: make(map[*ast.Symbol]*mutation.Binding)}
 	b.visit(file.AsNode())
-	result := mutation.Result{Calls: b.calls, Identifiers: b.identifiers}
+	result := mutation.Result{Calls: b.calls, Literals: b.literals, Identifiers: b.identifiers}
 	for _, symbol := range b.bindingOrder {
 		result.Bindings = append(result.Bindings, *b.bindings[symbol])
 	}
@@ -77,6 +77,7 @@ type builder struct {
 	bindings     map[*ast.Symbol]*mutation.Binding
 	bindingOrder []*ast.Symbol
 	calls        []mutation.CallSite
+	literals     []mutation.LiteralSite
 	identifiers  []string
 }
 
@@ -85,11 +86,14 @@ func (b *builder) visit(node *ast.Node) bool {
 		b.identifiers = append(b.identifiers, scanner.GetTextOfNode(node))
 		b.recordIdentifier(node)
 	}
-	if ast.IsVariableDeclaration(node) {
+	if ast.IsVariableDeclaration(node) || node.Kind == ast.KindParameter || node.Kind == ast.KindFunctionDeclaration {
 		b.recordDeclaration(node)
 	}
 	if node.Kind == ast.KindCallExpression {
 		b.recordCall(node)
+	}
+	if node.Kind == ast.KindObjectLiteralExpression || node.Kind == ast.KindArrayLiteralExpression {
+		b.recordLiteral(node)
 	}
 	node.ForEachChild(b.visit)
 	return false
@@ -108,8 +112,7 @@ func (b *builder) recordIdentifier(node *ast.Node) {
 }
 
 func (b *builder) recordDeclaration(node *ast.Node) {
-	declaration := node.AsVariableDeclaration()
-	name := declaration.Name()
+	name := node.Name()
 	if name == nil || !ast.IsIdentifier(name) {
 		return
 	}
@@ -118,14 +121,19 @@ func (b *builder) recordDeclaration(node *ast.Node) {
 		return
 	}
 	binding := b.ensureBinding(symbol, name)
-	statement := containingStatement(node)
-	if statement != nil {
-		binding.Declaration = b.span(statement)
+	if ast.IsVariableDeclaration(node) {
+		declaration := node.AsVariableDeclaration()
+		statement := containingStatement(node)
+		if statement != nil {
+			binding.Declaration = b.span(statement)
+		}
+		if declaration.Initializer != nil {
+			binding.Initializer = b.span(declaration.Initializer)
+		}
+		binding.Constant = ast.IsVarConst(node)
+		return
 	}
-	if declaration.Initializer != nil {
-		binding.Initializer = b.span(declaration.Initializer)
-	}
-	binding.Constant = ast.IsVarConst(node)
+	binding.Declaration = b.span(node)
 }
 
 func (b *builder) recordCall(node *ast.Node) {
@@ -147,6 +155,53 @@ func (b *builder) recordCall(node *ast.Node) {
 		site.ParameterTypes = append(site.ParameterTypes, b.typeIdentity(parameterType))
 	}
 	b.calls = append(b.calls, site)
+}
+
+func (b *builder) recordLiteral(node *ast.Node) {
+	statement := containingStatement(node)
+	if statement == nil {
+		return
+	}
+	contextualType := b.checker.GetContextualType(node, checker.ContextFlagsNone)
+	if contextualType == nil {
+		return
+	}
+	site := mutation.LiteralSite{Span: b.span(node), Statement: b.span(statement)}
+	if node.Kind == ast.KindObjectLiteralExpression {
+		site.Kind = "object"
+		for _, propertyNode := range node.AsObjectLiteralExpression().Properties.Nodes {
+			if propertyNode.Kind != ast.KindPropertyAssignment {
+				continue
+			}
+			property := propertyNode.AsPropertyAssignment()
+			name, ok := ast.TryGetTextOfPropertyName(property.Name())
+			if !ok || property.Initializer == nil {
+				continue
+			}
+			site.Slots = append(site.Slots, mutation.LiteralSlot{
+				Span:  b.span(property.Initializer),
+				Type:  b.typeIdentity(b.checker.GetTypeOfPropertyOfType(contextualType, name)),
+				Field: name,
+			})
+		}
+	} else {
+		site.Kind = "array"
+		elementType := b.checker.GetElementTypeOfArrayType(contextualType)
+		if elementType == nil {
+			return
+		}
+		site.ElementType = b.typeIdentity(elementType)
+		elements := node.AsArrayLiteralExpression().Elements.Nodes
+		for _, element := range elements {
+			site.Slots = append(site.Slots, mutation.LiteralSlot{Span: b.span(element), Type: site.ElementType})
+		}
+		if len(elements) == 0 {
+			site.Insertion = node.End() - 1
+		} else {
+			site.Insertion = elements[len(elements)-1].End()
+		}
+	}
+	b.literals = append(b.literals, site)
 }
 
 func (b *builder) ensureBinding(symbol *ast.Symbol, node *ast.Node) *mutation.Binding {
