@@ -362,15 +362,21 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 			if b.returnType == nil {
 				return nil, b.fenceWithMessage(node, "return outside a supported function")
 			}
-			if !sameType(*b.returnType, value.Type) {
+			if !slotAccepts(*b.returnType, value) {
 				return nil, b.typeFlowFence(data.Expression, *b.returnType, value.Type)
 			}
+			adaptUndefinedToSlot(*b.returnType, value)
 		} else if b.returnType != nil && b.returnType.Kind != graph.TypeVoid {
 			return nil, b.fenceWithMessage(node, "missing value for non-void return")
+		}
+		returnType := graph.Type{Kind: graph.TypeVoid}
+		if b.returnType != nil {
+			returnType = *b.returnType
 		}
 		return []*graph.Statement{{
 			Kind:     graph.StatementReturn,
 			Position: b.position(node),
+			Type:     returnType,
 			Value:    value,
 		}}, nil
 	}
@@ -429,9 +435,10 @@ func (b *builder) variableDeclarations(node *ast.Node) ([]*graph.Statement, *fen
 		if valueType.Kind == graph.TypeFunction && declaration.Initializer.Kind == ast.KindIdentifier && b.supportedCallValue(declaration.Initializer, make(map[*ast.Symbol]bool)) {
 			return nil, b.fenceDiagnostic(declaration.Initializer, "FunctionAlias", "unsupported function-valued storage alias")
 		}
-		if !sameType(valueType, value.Type) {
+		if !slotAccepts(valueType, value) {
 			return nil, b.typeFlowFence(declaration.Initializer, valueType, value.Type)
 		}
+		adaptUndefinedToSlot(valueType, value)
 		binding, fence := b.binding(nameNode)
 		if fence != nil {
 			return nil, fence
@@ -523,7 +530,10 @@ func (b *builder) parameters(nodes []*ast.Node) ([]graph.Parameter, *fenceError)
 		}
 		data := node.AsParameterDeclaration()
 		nameNode := data.Name()
-		if nameNode == nil || nameNode.Kind != ast.KindIdentifier || data.Modifiers() != nil || data.DotDotDotToken != nil || data.QuestionToken != nil || data.Initializer != nil {
+		if data.Initializer != nil {
+			return nil, b.fenceDiagnostic(data.Initializer, "ParameterDefault", "unsupported construct ParameterDefault")
+		}
+		if nameNode == nil || nameNode.Kind != ast.KindIdentifier || data.Modifiers() != nil || data.DotDotDotToken != nil {
 			return nil, b.fence(node)
 		}
 		if data.Type != nil {
@@ -534,6 +544,12 @@ func (b *builder) parameters(nodes []*ast.Node) ([]graph.Parameter, *fenceError)
 		parameterType, fence := b.checkedType(nameNode)
 		if fence != nil {
 			return nil, fence
+		}
+		if data.QuestionToken != nil {
+			if parameterType.Kind == graph.TypeFunction {
+				return nil, b.fenceDiagnostic(node, "UnsupportedUnion", "optional function parameters are unsupported")
+			}
+			parameterType.Optional = true
 		}
 		binding, fence := b.binding(nameNode)
 		if fence != nil {
@@ -575,8 +591,17 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			Boolean:  node.Kind == ast.KindTrueKeyword,
 		}, nil
 
+	case ast.KindUndefinedKeyword:
+		return &graph.Expression{
+			Kind:     graph.ExpressionUndefined,
+			Position: b.position(node),
+		}, nil
+
 	case ast.KindIdentifier:
-		valueType, fence := b.checkedType(node)
+		if node.Text() == "undefined" && b.checker.GetTypeAtLocation(node).Flags()&checker.TypeFlagsUndefined != 0 {
+			return &graph.Expression{Kind: graph.ExpressionUndefined, Position: b.position(node)}, nil
+		}
+		valueType, unwrapOptional, fence := b.expressionType(node)
 		if fence != nil {
 			return nil, fence
 		}
@@ -585,11 +610,12 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			return nil, fence
 		}
 		return &graph.Expression{
-			Kind:     graph.ExpressionIdentifier,
-			Position: b.position(node),
-			Binding:  binding,
-			Type:     valueType,
-			Name:     node.Text(),
+			Kind:           graph.ExpressionIdentifier,
+			Position:       b.position(node),
+			Binding:        binding,
+			Type:           valueType,
+			Name:           node.Text(),
+			UnwrapOptional: unwrapOptional,
 		}, nil
 
 	case ast.KindObjectLiteralExpression:
@@ -604,23 +630,39 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		if valueType.Kind != graph.TypeObject {
 			return nil, b.fenceWithMessage(node, "object literal requires one named shape")
 		}
+		// A present literal has the inner type even when its contextual storage
+		// slot is T | undefined; the slot is where Some is introduced.
+		valueType.Optional = false
 		shape, ok := b.shapeByID(valueType.Shape)
 		if !ok {
 			return nil, b.fenceWithMessage(node, "object literal shape was not registered")
 		}
 		properties := node.AsObjectLiteralExpression().Properties.Nodes
-		if len(properties) != len(shape.Fields) {
-			return nil, b.fenceWithMessage(node, "object literal fields must match named declaration order")
-		}
-		values := make([]graph.PropertyValue, 0, len(properties))
-		for index, propertyNode := range properties {
+		values := make([]graph.PropertyValue, 0, len(shape.Fields))
+		propertyIndex := 0
+		for index, field := range shape.Fields {
+			if propertyIndex >= len(properties) {
+				if !field.Type.Optional {
+					return nil, b.fenceWithMessage(node, "object literal fields must match named declaration order")
+				}
+				values = append(values, graph.PropertyValue{Position: b.position(node), Name: field.Name, Value: &graph.Expression{Kind: graph.ExpressionUndefined, Position: b.position(node), Type: field.Type}})
+				continue
+			}
+			propertyNode := properties[propertyIndex]
 			if propertyNode.Kind != ast.KindPropertyAssignment {
 				return nil, b.fence(propertyNode)
 			}
 			property := propertyNode.AsPropertyAssignment()
 			name := property.Name()
-			if property.Modifiers() != nil || property.PostfixToken != nil || property.Type != nil || name == nil || name.Kind != ast.KindIdentifier || name.Text() != shape.Fields[index].Name {
+			if property.Modifiers() != nil || property.PostfixToken != nil || property.Type != nil || name == nil || name.Kind != ast.KindIdentifier {
 				return nil, b.fenceWithMessage(propertyNode, "object literal fields must match named declaration order")
+			}
+			if name.Text() != field.Name {
+				if !field.Type.Optional {
+					return nil, b.fenceWithMessage(propertyNode, "object literal fields must match named declaration order")
+				}
+				values = append(values, graph.PropertyValue{Position: b.position(node), Name: field.Name, Value: &graph.Expression{Kind: graph.ExpressionUndefined, Position: b.position(node), Type: field.Type}})
+				continue
 			}
 			value, fence := b.expression(property.Initializer)
 			if fence != nil {
@@ -629,10 +671,15 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			if fence := b.functionValueFence(property.Initializer, value); fence != nil {
 				return nil, fence
 			}
-			if !sameType(shape.Fields[index].Type, value.Type) {
+			if !slotAccepts(shape.Fields[index].Type, value) {
 				return nil, b.typeFlowFence(property.Initializer, shape.Fields[index].Type, value.Type)
 			}
+			adaptUndefinedToSlot(shape.Fields[index].Type, value)
 			values = append(values, graph.PropertyValue{Position: b.position(propertyNode), Name: name.Text(), Value: value})
+			propertyIndex++
+		}
+		if propertyIndex != len(properties) {
+			return nil, b.fenceWithMessage(properties[propertyIndex], "object literal fields must match named declaration order")
 		}
 		return &graph.Expression{Kind: graph.ExpressionObject, Position: b.position(node), Type: valueType, Properties: values}, nil
 
@@ -648,6 +695,7 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		if valueType.Kind != graph.TypeArray || valueType.Element == nil {
 			return nil, b.fenceWithMessage(node, "array literal requires a contextual array type")
 		}
+		valueType.Optional = false
 		elements := make([]*graph.Expression, 0, len(node.AsArrayLiteralExpression().Elements.Nodes))
 		for _, elementNode := range node.AsArrayLiteralExpression().Elements.Nodes {
 			if elementNode.Kind == ast.KindSpreadElement || elementNode.Kind == ast.KindOmittedExpression {
@@ -670,7 +718,10 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 	case ast.KindPropertyAccessExpression:
 		data := node.AsPropertyAccessExpression()
 		name := data.Name()
-		if data.QuestionDotToken != nil || name == nil || name.Kind != ast.KindIdentifier {
+		if data.QuestionDotToken != nil {
+			return nil, b.fenceDiagnostic(data.QuestionDotToken, "OptionalChain", "unsupported construct OptionalChain")
+		}
+		if name == nil || name.Kind != ast.KindIdentifier {
 			return nil, b.fence(node)
 		}
 		receiver, fence := b.expression(data.Expression)
@@ -690,11 +741,18 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		if !ok || b.checker.GetSymbolAtLocation(name) == nil {
 			return nil, b.fenceWithMessage(name, "property is not declared on the named shape")
 		}
-		return &graph.Expression{Kind: graph.ExpressionProperty, Position: b.position(node), Type: field.Type, Receiver: receiver, Name: name.Text()}, nil
+		useType, unwrapOptional, fence := b.optionalUseType(node, field.Type)
+		if fence != nil {
+			return nil, fence
+		}
+		return &graph.Expression{Kind: graph.ExpressionProperty, Position: b.position(node), Type: useType, Receiver: receiver, Name: name.Text(), UnwrapOptional: unwrapOptional}, nil
 
 	case ast.KindElementAccessExpression:
 		data := node.AsElementAccessExpression()
-		if data.QuestionDotToken != nil || data.ArgumentExpression == nil {
+		if data.QuestionDotToken != nil {
+			return nil, b.fenceDiagnostic(data.QuestionDotToken, "OptionalChain", "unsupported construct OptionalChain")
+		}
+		if data.ArgumentExpression == nil {
 			return nil, b.fence(node)
 		}
 		receiver, fence := b.expression(data.Expression)
@@ -756,7 +814,10 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			return nil, b.fence(node)
 		}
 		data := node.AsCallExpression()
-		if data.QuestionDotToken != nil || data.TypeArguments != nil {
+		if data.QuestionDotToken != nil {
+			return nil, b.fenceDiagnostic(data.QuestionDotToken, "OptionalChain", "unsupported construct OptionalChain")
+		}
+		if data.TypeArguments != nil {
 			return nil, b.fence(node)
 		}
 		if data.Expression.Kind == ast.KindPropertyAccessExpression {
@@ -795,13 +856,22 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			}
 			arguments = append(arguments, argument)
 		}
+		if len(arguments) < len(callee.Type.Parameters) {
+			for index := len(arguments); index < len(callee.Type.Parameters); index++ {
+				if !callee.Type.Parameters[index].Optional {
+					return nil, b.fenceWithMessage(node, "call argument count does not match supported signature")
+				}
+				arguments = append(arguments, &graph.Expression{Kind: graph.ExpressionUndefined, Position: b.position(node), Type: callee.Type.Parameters[index]})
+			}
+		}
 		if len(arguments) != len(callee.Type.Parameters) {
 			return nil, b.fenceWithMessage(node, "call argument count does not match supported signature")
 		}
 		for index := range arguments {
-			if !sameType(callee.Type.Parameters[index], arguments[index].Type) {
+			if !slotAccepts(callee.Type.Parameters[index], arguments[index]) {
 				return nil, b.typeFlowFence(data.Arguments.Nodes[index], callee.Type.Parameters[index], arguments[index].Type)
 			}
+			adaptUndefinedToSlot(callee.Type.Parameters[index], arguments[index])
 		}
 		valueType, fence := b.checkedType(node)
 		if fence != nil {
@@ -825,7 +895,7 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			if fence != nil {
 				return nil, fence
 			}
-			if !isPrintable(expression.Type) {
+			if expression.Type.Optional || !isPrintable(expression.Type) {
 				return nil, b.fenceWithMessage(span.Expression, "unsupported template interpolation type")
 			}
 			expressions = append(expressions, expression)
@@ -841,6 +911,9 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 
 	case ast.KindArrowFunction:
 		return b.arrowExpression(node)
+
+	case ast.KindTypeOfExpression:
+		return nil, b.fenceDiagnostic(node, "TypeofCheck", "unsupported construct TypeofCheck")
 
 	case ast.KindParenthesizedExpression:
 		return b.expression(node.AsParenthesizedExpression().Expression)
@@ -880,13 +953,15 @@ func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceErro
 	method := nameNode.Text()
 	minArgs, maxArgs := 0, 0
 	switch method {
+	case "pop", "shift":
+		minArgs, maxArgs = 0, 0
 	case "push", "unshift":
 		minArgs, maxArgs = 1, 1
 	case "indexOf", "includes":
 		minArgs, maxArgs = 1, 2
 	case "slice":
 		minArgs, maxArgs = 0, 2
-	case "forEach", "map", "filter", "some", "every", "findIndex":
+	case "forEach", "map", "filter", "some", "every", "findIndex", "find":
 		minArgs, maxArgs = 1, 1
 	case "reduce":
 		if len(call.Arguments.Nodes) < 2 {
@@ -974,7 +1049,7 @@ func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceErro
 			if !sameType(callback.Parameters[0], *receiver.Type.Element) || (len(callback.Parameters) == 2 && callback.Parameters[1].Kind != graph.TypeNumber) {
 				return nil, b.fenceWithMessage(call.Arguments.Nodes[0], "array callback signature does not match element and index types")
 			}
-			if (method == "filter" || method == "some" || method == "every" || method == "findIndex") && callback.Result.Kind != graph.TypeBoolean {
+			if (method == "filter" || method == "some" || method == "every" || method == "findIndex" || method == "find") && callback.Result.Kind != graph.TypeBoolean {
 				return nil, b.fenceWithMessage(call.Arguments.Nodes[0], "array predicate callback must return boolean")
 			}
 		}
@@ -988,6 +1063,9 @@ func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceErro
 func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceError) {
 	data := node.AsBinaryExpression()
 	operatorKind := data.OperatorToken.Kind
+	if operatorKind == ast.KindQuestionQuestionToken || operatorKind == ast.KindQuestionQuestionEqualsToken {
+		return nil, b.fenceDiagnostic(data.OperatorToken, "NullishCoalescing", "unsupported construct NullishCoalescing")
+	}
 	if operator, ok := assignmentOperator(operatorKind); ok {
 		if data.Left.Kind != ast.KindIdentifier && data.Left.Kind != ast.KindPropertyAccessExpression && data.Left.Kind != ast.KindElementAccessExpression {
 			return nil, b.fence(data.Left)
@@ -999,16 +1077,40 @@ func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceErr
 		if fence != nil {
 			return nil, fence
 		}
+		if data.Left.Kind == ast.KindIdentifier {
+			symbol := b.checker.GetSymbolAtLocation(data.Left)
+			if symbol != nil {
+				declared, declaredFence := b.graphType(b.checker.GetTypeOfSymbol(symbol), data.Left)
+				if declaredFence != nil {
+					return nil, declaredFence
+				}
+				left.Type = declared
+				left.UnwrapOptional = false
+			}
+		} else if data.Left.Kind == ast.KindPropertyAccessExpression && left.Receiver != nil && left.Receiver.Type.Kind == graph.TypeObject {
+			if field, ok := b.shapeField(left.Receiver.Type.Shape, left.Name); ok {
+				left.Type = field.Type
+				left.UnwrapOptional = false
+			}
+		}
 		right, fence := b.expression(data.Right)
 		if fence != nil {
 			return nil, fence
 		}
-		valueType, fence := b.checkedType(node)
-		if fence != nil {
-			return nil, fence
+		var valueType graph.Type
+		if b.checker.GetTypeAtLocation(node).Flags()&checker.TypeFlagsUndefined != 0 && left.Type.Optional {
+			valueType = left.Type
+		} else {
+			valueType, fence = b.checkedType(node)
+			if fence != nil {
+				return nil, fence
+			}
 		}
-		if !validAssignment(operator, left.Type, right.Type) {
+		if (operator == "=" && !slotAccepts(left.Type, right)) || (operator != "=" && !validAssignment(operator, left.Type, right.Type)) {
 			return nil, b.fence(node)
+		}
+		if operator == "=" {
+			adaptUndefinedToSlot(left.Type, right)
 		}
 		return &graph.Expression{
 			Kind:     graph.ExpressionAssignment,
@@ -1036,7 +1138,23 @@ func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceErr
 	if fence != nil {
 		return nil, fence
 	}
-	if !validBinary(operator, left.Type, right.Type, valueType) {
+	if (operator == "===" || operator == "!==") && right.Kind == graph.ExpressionUndefined && left.UnwrapOptional {
+		left.UnwrapOptional = false
+		left.Type.Optional = true
+	}
+	if (operator == "===" || operator == "!==") && right.Kind == graph.ExpressionUndefined && left.Type.Optional {
+		right.Type = left.Type
+	}
+	if (operator == "===" || operator == "!==") && left.Kind == graph.ExpressionUndefined && right.Type.Optional {
+		left.Type = right.Type
+	}
+	if (operator == "===" || operator == "!==") && left.Kind == graph.ExpressionUndefined && right.UnwrapOptional {
+		right.UnwrapOptional = false
+		right.Type.Optional = true
+	}
+	optionalUndefinedEquality := (operator == "===" || operator == "!==") &&
+		((left.Type.Optional && right.Kind == graph.ExpressionUndefined) || (right.Type.Optional && left.Kind == graph.ExpressionUndefined))
+	if !optionalUndefinedEquality && !validBinary(operator, left.Type, right.Type, valueType) {
 		return nil, b.fence(node)
 	}
 	return &graph.Expression{
@@ -1140,14 +1258,39 @@ func (b *builder) booleanExpression(node *ast.Node) (*graph.Expression, *fenceEr
 	if fence != nil {
 		return nil, fence
 	}
-	if expression.Type.Kind != graph.TypeBoolean {
-		return nil, b.fenceWithMessage(node, "unsupported non-boolean condition")
+	if expression.Type.Kind != graph.TypeBoolean || expression.Type.Optional {
+		return nil, b.fenceDiagnostic(node, "NonBooleanCondition", "unsupported non-boolean condition")
 	}
 	return expression, nil
 }
 
 func (b *builder) checkedType(node *ast.Node) (graph.Type, *fenceError) {
 	return b.graphType(b.checker.GetTypeAtLocation(node), node)
+}
+
+func (b *builder) expressionType(node *ast.Node) (graph.Type, bool, *fenceError) {
+	symbol := b.checker.GetSymbolAtLocation(node)
+	if symbol == nil {
+		useType, fence := b.checkedType(node)
+		return useType, false, fence
+	}
+	declaredType, declaredFence := b.graphType(b.checker.GetTypeOfSymbol(symbol), node)
+	if declaredFence != nil {
+		return graph.Type{}, false, declaredFence
+	}
+	return b.optionalUseType(node, declaredType)
+}
+
+func (b *builder) optionalUseType(node *ast.Node, declaredType graph.Type) (graph.Type, bool, *fenceError) {
+	checkerUseType := b.checker.GetTypeAtLocation(node)
+	if checkerUseType.Flags()&checker.TypeFlagsUndefined != 0 && declaredType.Optional {
+		return declaredType, false, nil
+	}
+	useType, fence := b.graphType(checkerUseType, node)
+	if fence != nil {
+		return graph.Type{}, false, fence
+	}
+	return useType, declaredType.Optional && !useType.Optional && sameInnerType(declaredType, useType), nil
 }
 
 func (b *builder) ensureShapeDeclaration(node *ast.Node) (graph.ShapeID, *fenceError) {
@@ -1223,12 +1366,18 @@ func (b *builder) ensureNamedShape(symbol *ast.Symbol, useNode *ast.Node) (graph
 		}
 		member := memberNode.AsPropertySignatureDeclaration()
 		memberName := member.Name()
-		if member.Modifiers() != nil || member.PostfixToken != nil || member.Initializer != nil || member.Type == nil || memberName == nil || memberName.Kind != ast.KindIdentifier {
+		if member.Modifiers() != nil || (member.PostfixToken != nil && member.PostfixToken.Kind != ast.KindQuestionToken) || member.Initializer != nil || member.Type == nil || memberName == nil || memberName.Kind != ast.KindIdentifier {
 			return 0, b.fence(memberNode)
 		}
 		fieldType, fence := b.graphType(b.checker.GetTypeAtLocation(member.Type), member.Type)
 		if fence != nil {
 			return 0, fence
+		}
+		if member.PostfixToken != nil {
+			if fieldType.Kind == graph.TypeFunction {
+				return 0, b.fenceDiagnostic(memberNode, "UnsupportedUnion", "optional function fields are unsupported")
+			}
+			fieldType.Optional = true
 		}
 		fields = append(fields, graph.Field{
 			Position: b.position(memberNode),
@@ -1251,7 +1400,7 @@ func (b *builder) validateTypeNode(node *ast.Node) *fenceError {
 	switch node.Kind {
 	case ast.KindNumberKeyword, ast.KindStringKeyword, ast.KindBooleanKeyword, ast.KindVoidKeyword:
 		return nil
-	case ast.KindTypeReference, ast.KindArrayType:
+	case ast.KindTypeReference, ast.KindArrayType, ast.KindUnionType:
 		_, fence := b.checkedType(node)
 		return fence
 	case ast.KindFunctionType:
@@ -1280,6 +1429,43 @@ func (b *builder) validateTypeNode(node *ast.Node) *fenceError {
 
 func (b *builder) graphType(value *checker.Type, node *ast.Node) (graph.Type, *fenceError) {
 	flags := value.Flags()
+	if flags&checker.TypeFlagsUnion != 0 {
+		var inner *graph.Type
+		hasUndefined := false
+		for _, constituent := range value.Types() {
+			constituentFlags := constituent.Flags()
+			if constituentFlags&checker.TypeFlagsUndefined != 0 {
+				hasUndefined = true
+				continue
+			}
+			if constituentFlags&checker.TypeFlagsNull != 0 {
+				return graph.Type{}, b.fenceDiagnostic(node, "UnsupportedUnion", "unsupported union containing null")
+			}
+			candidate, fence := b.graphType(constituent, node)
+			if fence != nil {
+				return graph.Type{}, fence
+			}
+			if inner == nil {
+				inner = &candidate
+			} else if !sameType(*inner, candidate) {
+				return graph.Type{}, b.fenceDiagnostic(node, "UnsupportedUnion", "unsupported union "+b.checker.TypeToString(value))
+			}
+		}
+		if !hasUndefined && inner != nil && inner.Kind == graph.TypeBoolean {
+			return *inner, nil
+		}
+		if !hasUndefined || inner == nil || inner.Kind == graph.TypeFunction {
+			return graph.Type{}, b.fenceDiagnostic(node, "UnsupportedUnion", "unsupported union "+b.checker.TypeToString(value))
+		}
+		inner.Optional = true
+		return *inner, nil
+	}
+	if flags&checker.TypeFlagsUndefined != 0 {
+		return graph.Type{}, b.fenceDiagnostic(node, "UndefinedType", "undefined requires an optional slot")
+	}
+	if flags&checker.TypeFlagsNull != 0 {
+		return graph.Type{}, b.fenceDiagnostic(node, "UnsupportedUnion", "unsupported null type")
+	}
 	switch {
 	case flags&checker.TypeFlagsNumberLike != 0:
 		return graph.Type{Kind: graph.TypeNumber}, nil
@@ -1299,6 +1485,9 @@ func (b *builder) graphType(value *checker.Type, node *ast.Node) (graph.Type, *f
 		elementType, fence := b.graphType(element, node)
 		if fence != nil {
 			return graph.Type{}, fence
+		}
+		if elementType.Optional {
+			return graph.Type{}, b.fenceDiagnostic(node, "OptionalElement", "unsupported optional array element")
 		}
 		return graph.Type{Kind: graph.TypeArray, Element: &elementType}, nil
 	}
@@ -1338,7 +1527,7 @@ func (b *builder) graphType(value *checker.Type, node *ast.Node) (graph.Type, *f
 }
 
 func sameType(left graph.Type, right graph.Type) bool {
-	if left.Kind != right.Kind {
+	if left.Optional != right.Optional || left.Kind != right.Kind {
 		return false
 	}
 	switch left.Kind {
@@ -1357,6 +1546,34 @@ func sameType(left graph.Type, right graph.Type) bool {
 		}
 	}
 	return true
+}
+
+func sameInnerType(left graph.Type, right graph.Type) bool {
+	left.Optional = false
+	right.Optional = false
+	return sameType(left, right)
+}
+
+func slotAccepts(target graph.Type, source *graph.Expression) bool {
+	if source == nil {
+		return false
+	}
+	if sameType(target, source.Type) {
+		return true
+	}
+	if !target.Optional {
+		return false
+	}
+	if source.Kind == graph.ExpressionUndefined {
+		return true
+	}
+	return !source.Type.Optional && sameInnerType(target, source.Type)
+}
+
+func adaptUndefinedToSlot(target graph.Type, source *graph.Expression) {
+	if source != nil && source.Kind == graph.ExpressionUndefined {
+		source.Type = target
+	}
 }
 
 func (b *builder) typeFlowFence(node *ast.Node, target graph.Type, source graph.Type) *fenceError {

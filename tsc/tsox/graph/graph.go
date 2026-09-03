@@ -43,6 +43,7 @@ const (
 // TypeFunction.
 type Type struct {
 	Kind       TypeKind
+	Optional   bool
 	Parameters []Type
 	Result     *Type
 	Shape      ShapeID
@@ -122,6 +123,7 @@ const (
 	ExpressionNumber      ExpressionKind = "number"
 	ExpressionString      ExpressionKind = "string"
 	ExpressionBoolean     ExpressionKind = "boolean"
+	ExpressionUndefined   ExpressionKind = "undefined"
 	ExpressionIdentifier  ExpressionKind = "identifier"
 	ExpressionBinary      ExpressionKind = "binary"
 	ExpressionUnary       ExpressionKind = "unary"
@@ -148,36 +150,40 @@ type PropertyValue struct {
 // Expression stores only fields used by its Kind. Chunks has exactly one more
 // entry than Expressions for a template expression.
 type Expression struct {
-	Kind        ExpressionKind
-	Position    Position
-	Binding     BindingID
-	Type        Type
-	Number      float64
-	String      string
-	Boolean     bool
-	Name        string
-	Operator    string
-	Prefix      bool
-	Left        *Expression
-	Right       *Expression
-	Operand     *Expression
-	Callee      *Expression
-	Arguments   []*Expression
-	Chunks      []string
-	Expressions []*Expression
-	Parameters  []Parameter
-	ReturnType  Type
-	Body        []*Statement
-	Receiver    *Expression
-	Index       *Expression
-	Properties  []PropertyValue
+	Kind     ExpressionKind
+	Position Position
+	Binding  BindingID
+	Type     Type
+	Number   float64
+	String   string
+	Boolean  bool
+	// UnwrapOptional records a checker-proved use-site narrowing from the
+	// declaration's T | undefined type to T. The emitter must trap if the
+	// option is nevertheless empty at runtime.
+	UnwrapOptional bool
+	Name           string
+	Operator       string
+	Prefix         bool
+	Left           *Expression
+	Right          *Expression
+	Operand        *Expression
+	Callee         *Expression
+	Arguments      []*Expression
+	Chunks         []string
+	Expressions    []*Expression
+	Parameters     []Parameter
+	ReturnType     Type
+	Body           []*Statement
+	Receiver       *Expression
+	Index          *Expression
+	Properties     []PropertyValue
 }
 
 // IsCallbackArrayMethod reports whether name uses the callback iteration
 // protocol shared across extraction, evidence selection, and emission.
 func IsCallbackArrayMethod(name string) bool {
 	switch name {
-	case "forEach", "map", "filter", "some", "every", "findIndex", "reduce":
+	case "forEach", "map", "filter", "some", "every", "findIndex", "find", "reduce":
 		return true
 	default:
 		return false

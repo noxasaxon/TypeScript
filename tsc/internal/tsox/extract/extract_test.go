@@ -398,7 +398,7 @@ const narrow: Narrow = wide;`,
 			construct: "distinct named shapes",
 		},
 		{name: "recursive named shape", source: `interface Link { value: number; next: Link; }`, construct: "recursive named shape"},
-		{name: "array method", source: `const values: number[] = [1]; values.pop();`, construct: "pop"},
+		{name: "array method", source: `const values: number[] = [1]; values.reverse();`, construct: "reverse"},
 		{name: "compound composite assignment", source: `interface Point { x: number; } const point: Point = { x: 1 }; point.x += 1;`, construct: "compound composite assignment"},
 		{name: "object print", source: `interface Point { x: number; } const point: Point = { x: 1 }; console.log(point);`, construct: "console.log argument"},
 		{name: "array print", source: `const values: number[] = [1]; console.log(values);`, construct: "console.log argument"},
@@ -445,6 +445,126 @@ const copy: number[] = values.slice(-3.5, 4);`)
 		if value.Value.Receiver == nil || value.Value.Name == "" {
 			t.Errorf("%s method call lacks receiver or method name: %#v", name, value.Value)
 		}
+	}
+}
+
+func TestExtractAcceptsOptionalScalarBindingAndCheckerNarrowing(t *testing.T) {
+	t.Parallel()
+	result := Extract(extractSourcePath, `let value: number | undefined = undefined;
+value = 2;
+const missing: boolean = value === undefined;
+if (value !== undefined) {
+  console.log(value + 1);
+}`)
+	if result.Program == nil || len(result.Diagnostics) != 0 {
+		t.Fatalf("optional scalar extraction failed: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+	value := variableStatement(t, result.Program, "value")
+	if value.Type.Kind != graph.TypeNumber || !value.Type.Optional {
+		t.Fatalf("value type: got %#v, want optional number", value.Type)
+	}
+	if value.Value == nil || value.Value.Kind != graph.ExpressionUndefined {
+		t.Fatalf("value initializer: got %#v, want undefined", value.Value)
+	}
+	var narrowed *graph.Expression
+	for _, expression := range allGraphExpressions(result.Program) {
+		if expression.Kind == graph.ExpressionIdentifier && expression.Name == "value" && expression.UnwrapOptional {
+			narrowed = expression
+			break
+		}
+	}
+	if narrowed == nil || narrowed.Type.Kind != graph.TypeNumber || narrowed.Type.Optional {
+		t.Fatalf("narrowed use: got %#v, want unwrapped number use", narrowed)
+	}
+}
+
+func TestExtractAcceptsOptionalFieldsAndOmittedLiteralProperties(t *testing.T) {
+	t.Parallel()
+	result := Extract(extractSourcePath, `interface Point { x: number; }
+interface Holder { point?: Point; label: string | undefined; }
+const empty: Holder = { label: undefined };
+const point: Point = { x: 1 };
+const full: Holder = { point: point, label: "full" };
+if (full.point !== undefined) { full.point.x = 2; }`)
+	if result.Program == nil || len(result.Diagnostics) != 0 {
+		t.Fatalf("optional field extraction failed: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+	if len(result.Program.Shapes) != 2 || !result.Program.Shapes[1].Fields[0].Type.Optional || !result.Program.Shapes[1].Fields[1].Type.Optional {
+		t.Fatalf("optional field types were not preserved: %#v", result.Program.Shapes)
+	}
+	empty := variableStatement(t, result.Program, "empty")
+	if empty.Value == nil || len(empty.Value.Properties) != 2 || empty.Value.Properties[0].Value.Kind != graph.ExpressionUndefined {
+		t.Fatalf("omitted optional property was not materialized as undefined: %#v", empty.Value)
+	}
+}
+
+func TestExtractAcceptsOptionalParametersAndOmittedArguments(t *testing.T) {
+	t.Parallel()
+	result := Extract(extractSourcePath, `interface Point { x: number; }
+function scalar(value?: number): number { if (value === undefined) { return 0; } return value; }
+function composite(value: Point | undefined): number { if (value === undefined) { return 0; } return value.x; }
+const point: Point = { x: 2 };
+console.log(scalar() + scalar(1) + composite(point));`)
+	if result.Program == nil || len(result.Diagnostics) != 0 {
+		t.Fatalf("optional parameter extraction failed: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+	scalar := functionStatement(t, result.Program, "scalar")
+	if len(scalar.Parameters) != 1 || !scalar.Parameters[0].Type.Optional {
+		t.Fatalf("optional parameter was not preserved: %#v", scalar.Parameters)
+	}
+	call := firstCallTo(t, result.Program.Statements, "scalar")
+	if len(call.Arguments) != 1 || call.Arguments[0].Kind != graph.ExpressionUndefined {
+		t.Fatalf("omitted argument was not materialized as undefined: %#v", call.Arguments)
+	}
+}
+
+func TestExtractAcceptsOptionalReturningArrayMethods(t *testing.T) {
+	t.Parallel()
+	result := Extract(extractSourcePath, `interface Point { x: number; }
+const values: number[] = [1, 2];
+const popped: number | undefined = values.pop();
+const shifted: number | undefined = values.shift();
+const points: Point[] = [{ x: 1 }];
+const found: Point | undefined = points.find((point: Point): boolean => { return point.x === 1; });`)
+	if result.Program == nil || len(result.Diagnostics) != 0 {
+		t.Fatalf("optional array method extraction failed: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+	for _, name := range []string{"popped", "shifted", "found"} {
+		value := variableStatement(t, result.Program, name)
+		if value.Value == nil || value.Value.Kind != graph.ExpressionMethodCall || !value.Value.Type.Optional {
+			t.Errorf("%s initializer: got %#v, want optional method call", name, value.Value)
+		}
+	}
+}
+
+func TestExtractFencesOptionalBoundariesWithNamedPositions(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		source    string
+		construct string
+		position  graph.Position
+	}{
+		{name: "general union", source: `let value: number | string = 1;`, construct: "UnsupportedUnion", position: graph.Position{Line: 1, Column: 12}},
+		{name: "null", source: `let value: number | null = null;`, construct: "UnsupportedUnion", position: graph.Position{Line: 1, Column: 12}},
+		{name: "optional element", source: `const values: (number | undefined)[] = [undefined];`, construct: "OptionalElement", position: graph.Position{Line: 1, Column: 15}},
+		{name: "optional chain", source: `interface Point { x: number; } let point: Point | undefined = { x: 1 }; const value = point?.x;`, construct: "OptionalChain", position: graph.Position{Line: 1, Column: 92}},
+		{name: "nullish coalescing", source: `const value: number | undefined = undefined; const result = value ?? 1;`, construct: "NullishCoalescing", position: graph.Position{Line: 1, Column: 67}},
+		{name: "parameter default", source: `function f(value: number = 1): number { return value; }`, construct: "ParameterDefault", position: graph.Position{Line: 1, Column: 28}},
+		{name: "typeof check", source: `const value: number | undefined = undefined; const missing = typeof value === "undefined";`, construct: "TypeofCheck", position: graph.Position{Line: 1, Column: 62}},
+		{name: "optional truthiness", source: `let value: number | undefined = undefined; if (value) { value = 1; }`, construct: "NonBooleanCondition", position: graph.Position{Line: 1, Column: 48}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := Extract(extractSourcePath, test.source)
+			if result.Program != nil || len(result.Diagnostics) != 1 {
+				t.Fatalf("result: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+			}
+			diagnostic := result.Diagnostics[0]
+			if diagnostic.Construct != test.construct || diagnostic.Position != test.position {
+				t.Fatalf("diagnostic: got %#v, want positioned %s", diagnostic, test.construct)
+			}
+		})
 	}
 }
 
@@ -525,7 +645,7 @@ const callbacks: (() => number)[] = values.map((value: number): () => number => 
 
 func TestExtractFencesUnsupportedArrayMethodsAtTheMethodName(t *testing.T) {
 	t.Parallel()
-	for _, method := range []string{"pop", "shift", "reverse"} {
+	for _, method := range []string{"reverse"} {
 		method := method
 		t.Run(method, func(t *testing.T) {
 			t.Parallel()
