@@ -288,6 +288,21 @@ console.log(make()());`)
 	}
 }
 
+func TestExtractFencesFunctionTypedBindingUsedAsValue(t *testing.T) {
+	t.Parallel()
+
+	result := Extract(extractSourcePath, `function pass(next: () => number): () => number {
+  return next;
+}`)
+	if result.Program != nil || len(result.Diagnostics) != 1 {
+		t.Fatalf("function value result: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+	diagnostic := result.Diagnostics[0]
+	if diagnostic.Construct != "FunctionValue" || diagnostic.Position != (graph.Position{Line: 2, Column: 10}) || !strings.Contains(diagnostic.Message, "function-typed binding used as a value") {
+		t.Fatalf("function value diagnostic: got %#v", diagnostic)
+	}
+}
+
 func TestExtractAcceptsNamedObjectsDenseArraysMutationAndIdentity(t *testing.T) {
 	t.Parallel()
 

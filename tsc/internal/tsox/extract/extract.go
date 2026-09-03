@@ -179,6 +179,9 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 		if fence != nil {
 			return nil, fence
 		}
+		if expression.Type.Kind == graph.TypeFunction && expressionNode.Kind == ast.KindIdentifier {
+			return nil, b.fenceDiagnostic(expressionNode, "FunctionValue", "unsupported function-typed binding used as a value")
+		}
 		return []*graph.Statement{{
 			Kind:     graph.StatementExpression,
 			Position: b.position(node),
@@ -349,6 +352,9 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 			value, fence = b.expression(data.Expression)
 			if fence != nil {
 				return nil, fence
+			}
+			if value.Type.Kind == graph.TypeFunction && data.Expression.Kind == ast.KindIdentifier {
+				return nil, b.fenceDiagnostic(data.Expression, "FunctionValue", "unsupported function-typed binding used as a value")
 			}
 			if b.returnType == nil {
 				return nil, b.fenceWithMessage(node, "return outside a supported function")
@@ -738,6 +744,9 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			argument, fence := b.expression(argumentNode)
 			if fence != nil {
 				return nil, fence
+			}
+			if argument.Type.Kind == graph.TypeFunction && argumentNode.Kind == ast.KindIdentifier {
+				return nil, b.fenceDiagnostic(argumentNode, "FunctionValue", "unsupported function-typed binding used as a value")
 			}
 			arguments = append(arguments, argument)
 		}
