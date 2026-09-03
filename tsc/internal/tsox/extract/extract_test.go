@@ -546,6 +546,8 @@ func TestExtractFencesOptionalBoundariesWithNamedPositions(t *testing.T) {
 		position  graph.Position
 	}{
 		{name: "general union", source: `let value: number | string = 1;`, construct: "UnsupportedUnion", position: graph.Position{Line: 1, Column: 12}},
+		{name: "boolean literal union", source: `let value: true | false = true;`, construct: "UnsupportedUnion", position: graph.Position{Line: 1, Column: 12}},
+		{name: "optional void", source: `let value: void | undefined = undefined;`, construct: "UnsupportedUnion", position: graph.Position{Line: 1, Column: 12}},
 		{name: "null", source: `let value: number | null = null;`, construct: "UnsupportedUnion", position: graph.Position{Line: 1, Column: 12}},
 		{name: "optional element", source: `const values: (number | undefined)[] = [undefined];`, construct: "OptionalElement", position: graph.Position{Line: 1, Column: 15}},
 		{name: "optional chain", source: `interface Point { x: number; } let point: Point | undefined = { x: 1 }; const value = point?.x;`, construct: "OptionalChain", position: graph.Position{Line: 1, Column: 92}},
@@ -553,6 +555,7 @@ func TestExtractFencesOptionalBoundariesWithNamedPositions(t *testing.T) {
 		{name: "parameter default", source: `function f(value: number = 1): number { return value; }`, construct: "ParameterDefault", position: graph.Position{Line: 1, Column: 28}},
 		{name: "typeof check", source: `const value: number | undefined = undefined; const missing = typeof value === "undefined";`, construct: "TypeofCheck", position: graph.Position{Line: 1, Column: 62}},
 		{name: "optional truthiness", source: `let value: number | undefined = undefined; if (value) { value = 1; }`, construct: "NonBooleanCondition", position: graph.Position{Line: 1, Column: 48}},
+		{name: "optional composite equality", source: "interface Point { x: number; }\nlet left: Point | undefined = undefined;\nlet right: Point | undefined = undefined;\nconsole.log(left === right);", construct: "BinaryExpression", position: graph.Position{Line: 4, Column: 13}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

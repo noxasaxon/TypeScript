@@ -1400,7 +1400,14 @@ func (b *builder) validateTypeNode(node *ast.Node) *fenceError {
 	switch node.Kind {
 	case ast.KindNumberKeyword, ast.KindStringKeyword, ast.KindBooleanKeyword, ast.KindVoidKeyword:
 		return nil
-	case ast.KindTypeReference, ast.KindArrayType, ast.KindUnionType:
+	case ast.KindTypeReference, ast.KindArrayType:
+		_, fence := b.checkedType(node)
+		return fence
+	case ast.KindUnionType:
+		members := node.AsUnionTypeNode().Types.Nodes
+		if len(members) != 2 || (members[0].Kind != ast.KindUndefinedKeyword && members[1].Kind != ast.KindUndefinedKeyword) {
+			return b.fenceDiagnostic(node, "UnsupportedUnion", "unsupported union "+b.checker.TypeToString(b.checker.GetTypeAtLocation(node)))
+		}
 		_, fence := b.checkedType(node)
 		return fence
 	case ast.KindFunctionType:
@@ -1454,7 +1461,7 @@ func (b *builder) graphType(value *checker.Type, node *ast.Node) (graph.Type, *f
 		if !hasUndefined && inner != nil && inner.Kind == graph.TypeBoolean {
 			return *inner, nil
 		}
-		if !hasUndefined || inner == nil || inner.Kind == graph.TypeFunction {
+		if !hasUndefined || inner == nil || inner.Kind == graph.TypeFunction || inner.Kind == graph.TypeVoid {
 			return graph.Type{}, b.fenceDiagnostic(node, "UnsupportedUnion", "unsupported union "+b.checker.TypeToString(value))
 		}
 		inner.Optional = true
@@ -1811,7 +1818,7 @@ func validBinary(operator string, left graph.Type, right graph.Type, result grap
 	case "<", "<=", ">", ">=":
 		return left.Kind == graph.TypeNumber && right.Kind == graph.TypeNumber && result.Kind == graph.TypeBoolean
 	case "===", "!==":
-		return sameType(left, right) && (left.Kind == graph.TypeNumber || left.Kind == graph.TypeString || left.Kind == graph.TypeBoolean || left.Kind == graph.TypeObject || left.Kind == graph.TypeArray) && result.Kind == graph.TypeBoolean
+		return !left.Optional && !right.Optional && sameType(left, right) && (left.Kind == graph.TypeNumber || left.Kind == graph.TypeString || left.Kind == graph.TypeBoolean || left.Kind == graph.TypeObject || left.Kind == graph.TypeArray) && result.Kind == graph.TypeBoolean
 	case "&&", "||":
 		return left.Kind == graph.TypeBoolean && right.Kind == graph.TypeBoolean && result.Kind == graph.TypeBoolean
 	default:
