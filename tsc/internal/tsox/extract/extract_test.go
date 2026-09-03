@@ -290,16 +290,28 @@ console.log(make()());`)
 
 func TestExtractFencesFunctionTypedBindingUsedAsValue(t *testing.T) {
 	t.Parallel()
-
-	result := Extract(extractSourcePath, `function pass(next: () => number): () => number {
-  return next;
-}`)
-	if result.Program != nil || len(result.Diagnostics) != 1 {
-		t.Fatalf("function value result: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	tests := []struct {
+		name     string
+		source   string
+		position graph.Position
+	}{
+		{name: "return", source: "function pass(next: () => number): () => number {\n  return next;\n}", position: graph.Position{Line: 2, Column: 10}},
+		{name: "parenthesized return", source: "function pass(next: () => number): () => number {\n  return (next);\n}", position: graph.Position{Line: 2, Column: 11}},
+		{name: "call argument", source: "function apply(next: () => number): void {}\nconst next = (): number => { return 1; };\napply((next));", position: graph.Position{Line: 3, Column: 8}},
+		{name: "object member", source: "interface Holder { next: () => number; }\nconst next = (): number => { return 1; };\nconst holder: Holder = { next: (next) };", position: graph.Position{Line: 3, Column: 33}},
+		{name: "array element", source: "const next = (): number => { return 1; };\nconst values: (() => number)[] = [(next)];", position: graph.Position{Line: 2, Column: 36}},
 	}
-	diagnostic := result.Diagnostics[0]
-	if diagnostic.Construct != "FunctionValue" || diagnostic.Position != (graph.Position{Line: 2, Column: 10}) || !strings.Contains(diagnostic.Message, "function-typed binding used as a value") {
-		t.Fatalf("function value diagnostic: got %#v", diagnostic)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := Extract(extractSourcePath, test.source)
+			if result.Program != nil || len(result.Diagnostics) != 1 {
+				t.Fatalf("function value result: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+			}
+			diagnostic := result.Diagnostics[0]
+			if diagnostic.Construct != "FunctionValue" || diagnostic.Position != test.position || !strings.Contains(diagnostic.Message, "function-typed binding used as a value") {
+				t.Fatalf("function value diagnostic: got %#v, want position %#v", diagnostic, test.position)
+			}
+		})
 	}
 }
 

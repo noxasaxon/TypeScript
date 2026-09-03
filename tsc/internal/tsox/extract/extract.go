@@ -179,8 +179,8 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 		if fence != nil {
 			return nil, fence
 		}
-		if expression.Type.Kind == graph.TypeFunction && expressionNode.Kind == ast.KindIdentifier {
-			return nil, b.fenceDiagnostic(expressionNode, "FunctionValue", "unsupported construct FunctionValue: function-typed binding used as a value")
+		if fence := b.functionValueFence(expressionNode, expression); fence != nil {
+			return nil, fence
 		}
 		return []*graph.Statement{{
 			Kind:     graph.StatementExpression,
@@ -353,8 +353,8 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 			if fence != nil {
 				return nil, fence
 			}
-			if value.Type.Kind == graph.TypeFunction && data.Expression.Kind == ast.KindIdentifier {
-				return nil, b.fenceDiagnostic(data.Expression, "FunctionValue", "unsupported construct FunctionValue: function-typed binding used as a value")
+			if fence := b.functionValueFence(data.Expression, value); fence != nil {
+				return nil, fence
 			}
 			if b.returnType == nil {
 				return nil, b.fenceWithMessage(node, "return outside a supported function")
@@ -593,6 +593,9 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			if fence != nil {
 				return nil, fence
 			}
+			if fence := b.functionValueFence(property.Initializer, value); fence != nil {
+				return nil, fence
+			}
 			if !sameType(shape.Fields[index].Type, value.Type) {
 				return nil, b.typeFlowFence(property.Initializer, shape.Fields[index].Type, value.Type)
 			}
@@ -619,6 +622,9 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			}
 			element, fence := b.expression(elementNode)
 			if fence != nil {
+				return nil, fence
+			}
+			if fence := b.functionValueFence(elementNode, element); fence != nil {
 				return nil, fence
 			}
 			if !sameType(*valueType.Element, element.Type) {
@@ -745,8 +751,8 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			if fence != nil {
 				return nil, fence
 			}
-			if argument.Type.Kind == graph.TypeFunction && argumentNode.Kind == ast.KindIdentifier {
-				return nil, b.fenceDiagnostic(argumentNode, "FunctionValue", "unsupported construct FunctionValue: function-typed binding used as a value")
+			if fence := b.functionValueFence(argumentNode, argument); fence != nil {
+				return nil, fence
 			}
 			arguments = append(arguments, argument)
 		}
@@ -801,6 +807,20 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		return b.expression(node.AsParenthesizedExpression().Expression)
 	}
 	return nil, b.fence(node)
+}
+
+func (b *builder) functionValueFence(node *ast.Node, expression *graph.Expression) *fenceError {
+	if expression == nil || expression.Type.Kind != graph.TypeFunction {
+		return nil
+	}
+	valueNode := node
+	for valueNode != nil && valueNode.Kind == ast.KindParenthesizedExpression {
+		valueNode = valueNode.AsParenthesizedExpression().Expression
+	}
+	if valueNode == nil || valueNode.Kind != ast.KindIdentifier {
+		return nil
+	}
+	return b.fenceDiagnostic(valueNode, "FunctionValue", "unsupported construct FunctionValue: function-typed binding used as a value")
 }
 
 func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceError) {
