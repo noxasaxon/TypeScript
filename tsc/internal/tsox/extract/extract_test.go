@@ -300,6 +300,7 @@ func TestExtractFencesFunctionTypedBindingUsedAsValue(t *testing.T) {
 		{name: "call argument", source: "function apply(next: () => number): void {}\nconst next = (): number => { return 1; };\napply((next));", position: graph.Position{Line: 3, Column: 8}},
 		{name: "object member", source: "interface Holder { next: () => number; }\nconst next = (): number => { return 1; };\nconst holder: Holder = { next: (next) };", position: graph.Position{Line: 3, Column: 33}},
 		{name: "array element", source: "const next = (): number => { return 1; };\nconst values: (() => number)[] = [(next)];", position: graph.Position{Line: 2, Column: 36}},
+		{name: "array method argument", source: "const callbacks: (() => number)[] = [];\nconst next = (): number => { return 1; };\ncallbacks.push((next));", position: graph.Position{Line: 3, Column: 17}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

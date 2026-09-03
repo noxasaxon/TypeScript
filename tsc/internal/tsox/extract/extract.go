@@ -859,6 +859,9 @@ func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceErro
 		if argumentFence != nil {
 			return nil, argumentFence
 		}
+		if fence := b.functionValueFence(argumentNode, argument); fence != nil {
+			return nil, fence
+		}
 		want := graph.Type{Kind: graph.TypeNumber}
 		if method != "slice" && index == 0 {
 			want = *receiver.Type.Element
