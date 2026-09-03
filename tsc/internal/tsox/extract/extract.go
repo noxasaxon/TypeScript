@@ -356,6 +356,9 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 			if fence := b.functionValueFence(data.Expression, value); fence != nil {
 				return nil, fence
 			}
+			if value.Kind == graph.ExpressionMethodCall && value.Name == "forEach" {
+				return nil, b.fenceDiagnostic(data.Expression, "ForEachValue", "unsupported construct ForEachValue: forEach is statement-only")
+			}
 			if b.returnType == nil {
 				return nil, b.fenceWithMessage(node, "return outside a supported function")
 			}
@@ -403,9 +406,21 @@ func (b *builder) variableDeclarations(node *ast.Node) ([]*graph.Statement, *fen
 				return nil, fence
 			}
 		}
+		initializerValue := declaration.Initializer
+		for initializerValue.Kind == ast.KindParenthesizedExpression {
+			initializerValue = initializerValue.AsParenthesizedExpression().Expression
+		}
+		if initializerValue.Kind == ast.KindArrowFunction {
+			if reference := b.selfReference(initializerValue, nameNode); reference != nil {
+				return nil, b.fenceDiagnostic(reference, "SelfReferentialArrow", "unsupported construct SelfReferentialArrow: arrow references its own binding")
+			}
+		}
 		value, fence := b.expression(declaration.Initializer)
 		if fence != nil {
 			return nil, fence
+		}
+		if value.Kind == graph.ExpressionMethodCall && value.Name == "forEach" {
+			return nil, b.fenceDiagnostic(declaration.Initializer, "ForEachValue", "unsupported construct ForEachValue: forEach is statement-only")
 		}
 		valueType, fence := b.checkedType(nameNode)
 		if fence != nil {
@@ -432,6 +447,24 @@ func (b *builder) variableDeclarations(node *ast.Node) ([]*graph.Statement, *fen
 		})
 	}
 	return result, nil
+}
+
+func (b *builder) selfReference(root, name *ast.Node) *ast.Node {
+	target := b.checker.GetSymbolAtLocation(name)
+	if target == nil {
+		return nil
+	}
+	var found *ast.Node
+	var visit func(*ast.Node) bool
+	visit = func(node *ast.Node) bool {
+		if node.Kind == ast.KindIdentifier && b.checker.GetSymbolAtLocation(node) == target {
+			found = node
+			return true
+		}
+		return node.ForEachChild(visit)
+	}
+	root.ForEachChild(visit)
+	return found
 }
 
 func (b *builder) functionDeclaration(node *ast.Node) (*graph.Statement, *fenceError) {
@@ -746,13 +779,19 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			return nil, b.fence(node)
 		}
 		arguments := make([]*graph.Expression, 0, len(data.Arguments.Nodes))
-		for _, argumentNode := range data.Arguments.Nodes {
+		for index, argumentNode := range data.Arguments.Nodes {
 			argument, fence := b.expression(argumentNode)
 			if fence != nil {
 				return nil, fence
 			}
-			if fence := b.functionValueFence(argumentNode, argument); fence != nil {
-				return nil, fence
+			functionArgument := index < len(callee.Type.Parameters) && callee.Type.Parameters[index].Kind == graph.TypeFunction
+			if !functionArgument {
+				if fence := b.functionValueFence(argumentNode, argument); fence != nil {
+					return nil, fence
+				}
+			}
+			if functionArgument && !b.supportedCallbackArgument(argumentNode) {
+				return nil, b.fenceDiagnostic(argumentNode, "FunctionValue", "unsupported construct FunctionValue: callback argument is not a supported function place")
 			}
 			arguments = append(arguments, argument)
 		}
@@ -847,11 +886,39 @@ func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceErro
 		minArgs, maxArgs = 1, 2
 	case "slice":
 		minArgs, maxArgs = 0, 2
+	case "forEach", "map", "filter", "some", "every", "findIndex":
+		minArgs, maxArgs = 1, 1
+	case "reduce":
+		if len(call.Arguments.Nodes) < 2 {
+			return nil, b.fenceDiagnostic(nameNode, "ReduceWithoutInitial", "unsupported construct ReduceWithoutInitial: reduce requires an initial value")
+		}
+		minArgs, maxArgs = 2, 2
 	default:
 		return nil, b.fenceDiagnostic(nameNode, "ArrayMethodCall", "unsupported array method "+method)
 	}
 	if len(call.Arguments.Nodes) < minArgs || len(call.Arguments.Nodes) > maxArgs {
 		return nil, b.fenceWithMessage(node, "array method argument count does not match supported signature")
+	}
+	if method == "reduce" {
+		accumulatorNode := call.Arguments.Nodes[1]
+		accumulatorType, accumulatorFence := b.checkedType(accumulatorNode)
+		if accumulatorFence == nil && (accumulatorType.Kind == graph.TypeObject || accumulatorType.Kind == graph.TypeArray) {
+			return nil, b.fenceDiagnostic(nameNode, "ReduceCompositeAccumulator", "unsupported construct ReduceCompositeAccumulator: reduce accumulator must be scalar")
+		}
+		callbackNode := call.Arguments.Nodes[0]
+		if callbackNode.Kind == ast.KindArrowFunction && len(callbackNode.AsArrowFunction().Parameters.Nodes) > 0 {
+			parameterType, parameterFence := b.checkedType(callbackNode.AsArrowFunction().Parameters.Nodes[0].AsParameterDeclaration().Name())
+			if parameterFence == nil && (parameterType.Kind == graph.TypeObject || parameterType.Kind == graph.TypeArray) {
+				return nil, b.fenceDiagnostic(nameNode, "ReduceCompositeAccumulator", "unsupported construct ReduceCompositeAccumulator: reduce accumulator must be scalar")
+			}
+		}
+	}
+	valueType, typeFence := b.checkedType(node)
+	if typeFence != nil {
+		return nil, typeFence
+	}
+	if method == "reduce" && (valueType.Kind == graph.TypeObject || valueType.Kind == graph.TypeArray) {
+		return nil, b.fenceDiagnostic(nameNode, "ReduceCompositeAccumulator", "unsupported construct ReduceCompositeAccumulator: reduce accumulator must be scalar")
 	}
 	arguments := make([]*graph.Expression, 0, len(call.Arguments.Nodes))
 	for index, argumentNode := range call.Arguments.Nodes {
@@ -859,11 +926,36 @@ func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceErro
 		if argumentFence != nil {
 			return nil, argumentFence
 		}
+		callback := graph.IsCallbackArrayMethod(method) && index == 0
+		if callback {
+			if argument.Type.Kind != graph.TypeFunction || argument.Type.Result == nil || !b.supportedCallbackArgument(argumentNode) {
+				return nil, b.fenceDiagnostic(argumentNode, "FunctionValue", "unsupported construct FunctionValue: callback argument is not a supported function place")
+			}
+			maxParameters := 2
+			minParameters := 1
+			if method == "reduce" {
+				minParameters = 2
+			}
+			if len(argument.Type.Parameters) > maxParameters {
+				position := argumentNode
+				if argumentNode.Kind == ast.KindArrowFunction && len(argumentNode.AsArrowFunction().Parameters.Nodes) > maxParameters {
+					position = argumentNode.AsArrowFunction().Parameters.Nodes[maxParameters]
+				}
+				return nil, b.fenceDiagnostic(position, "CallbackArrayParameter", "unsupported construct CallbackArrayParameter: callback accepts too many array method parameters")
+			}
+			if len(argument.Type.Parameters) < minParameters {
+				return nil, b.fenceWithMessage(argumentNode, "callback parameter count does not match supported signature")
+			}
+			arguments = append(arguments, argument)
+			continue
+		}
 		if fence := b.functionValueFence(argumentNode, argument); fence != nil {
 			return nil, fence
 		}
 		want := graph.Type{Kind: graph.TypeNumber}
-		if method != "slice" && index == 0 {
+		if method == "reduce" {
+			want = valueType
+		} else if method != "slice" && index == 0 {
 			want = *receiver.Type.Element
 		}
 		if !sameType(want, argument.Type) {
@@ -871,9 +963,24 @@ func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceErro
 		}
 		arguments = append(arguments, argument)
 	}
-	valueType, typeFence := b.checkedType(node)
-	if typeFence != nil {
-		return nil, typeFence
+	if len(arguments) > 0 && arguments[0].Type.Kind == graph.TypeFunction {
+		callback := arguments[0].Type
+		if method == "reduce" {
+			accumulator := arguments[1].Type
+			if !sameType(callback.Parameters[0], accumulator) || !sameType(callback.Parameters[1], *receiver.Type.Element) || !sameType(*callback.Result, accumulator) {
+				return nil, b.fenceWithMessage(call.Arguments.Nodes[0], "reduce callback signature does not match accumulator and element types")
+			}
+		} else {
+			if !sameType(callback.Parameters[0], *receiver.Type.Element) || (len(callback.Parameters) == 2 && callback.Parameters[1].Kind != graph.TypeNumber) {
+				return nil, b.fenceWithMessage(call.Arguments.Nodes[0], "array callback signature does not match element and index types")
+			}
+			if (method == "filter" || method == "some" || method == "every" || method == "findIndex") && callback.Result.Kind != graph.TypeBoolean {
+				return nil, b.fenceWithMessage(call.Arguments.Nodes[0], "array predicate callback must return boolean")
+			}
+		}
+	}
+	if method == "map" && valueType.Kind == graph.TypeArray && valueType.Element != nil && valueType.Element.Kind == graph.TypeFunction {
+		return nil, b.fenceDiagnostic(nameNode, "FunctionValue", "unsupported construct FunctionValue: map result stores function values in array elements")
 	}
 	return &graph.Expression{Kind: graph.ExpressionMethodCall, Position: b.position(node), Type: valueType, Receiver: receiver, Name: method, Arguments: arguments}, nil
 }
@@ -1336,6 +1443,16 @@ func (b *builder) consoleLogCall(node *ast.Node) (*ast.CallExpression, bool) {
 // `const parse = parseFloat` while accepting function-valued closures.
 func (b *builder) supportedCallTarget(node *ast.Node) bool {
 	return b.supportedCallValue(node, make(map[*ast.Symbol]bool))
+}
+
+func (b *builder) supportedCallbackArgument(node *ast.Node) bool {
+	for node != nil && node.Kind == ast.KindParenthesizedExpression {
+		node = node.AsParenthesizedExpression().Expression
+	}
+	if node == nil || (node.Kind != ast.KindIdentifier && node.Kind != ast.KindArrowFunction) {
+		return false
+	}
+	return b.supportedCallTarget(node)
 }
 
 func (b *builder) supportedCallValue(node *ast.Node, seen map[*ast.Symbol]bool) bool {

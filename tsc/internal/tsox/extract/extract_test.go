@@ -297,7 +297,6 @@ func TestExtractFencesFunctionTypedBindingUsedAsValue(t *testing.T) {
 	}{
 		{name: "return", source: "function pass(next: () => number): () => number {\n  return next;\n}", position: graph.Position{Line: 2, Column: 10}},
 		{name: "parenthesized return", source: "function pass(next: () => number): () => number {\n  return (next);\n}", position: graph.Position{Line: 2, Column: 11}},
-		{name: "call argument", source: "function apply(next: () => number): void {}\nconst next = (): number => { return 1; };\napply((next));", position: graph.Position{Line: 3, Column: 8}},
 		{name: "object member", source: "interface Holder { next: () => number; }\nconst next = (): number => { return 1; };\nconst holder: Holder = { next: (next) };", position: graph.Position{Line: 3, Column: 33}},
 		{name: "array element", source: "const next = (): number => { return 1; };\nconst values: (() => number)[] = [(next)];", position: graph.Position{Line: 2, Column: 36}},
 		{name: "array method argument", source: "const callbacks: (() => number)[] = [];\nconst next = (): number => { return 1; };\ncallbacks.push((next));", position: graph.Position{Line: 3, Column: 17}},
@@ -449,6 +448,81 @@ const copy: number[] = values.slice(-3.5, 4);`)
 	}
 }
 
+func TestExtractAcceptsCallbackArrayMethodsAndFunctionArguments(t *testing.T) {
+	t.Parallel()
+	result := Extract(extractSourcePath, `function apply(callback: (value: number) => number, value: number): number {
+  return callback(value);
+}
+function positive(value: number): boolean { return value > 0; }
+const values: number[] = [1, 2, 3];
+const visit = (value: number): void => { console.log(value); };
+values.forEach(visit);
+values.forEach((value: number, index: number): void => { console.log(value + index); });
+const mapped: number[] = values.map((value: number): number => { return value + 1; });
+const filtered: number[] = values.filter(positive);
+values.forEach(positive);
+const any: boolean = values.some(positive);
+const all: boolean = values.every(positive);
+const index: number = values.findIndex(positive);
+const total: number = values.reduce((sum: number, value: number): number => { return sum + value; }, 0);
+const applied: number = apply((value: number): number => { return value + 1; }, 1);`)
+	if result.Program == nil || len(result.Diagnostics) != 0 {
+		t.Fatalf("callback extraction failed: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+}
+
+func TestExtractFencesCallbackMethodBoundaries(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		source    string
+		construct string
+		position  graph.Position
+	}{
+		{name: "third parameter", source: `const values: number[] = [1]; values.forEach((value: number, index: number, array: number[]): void => { console.log(value); });`, construct: "CallbackArrayParameter", position: graph.Position{Line: 1, Column: 77}},
+		{name: "reduce no initial", source: `const values: number[] = [1]; const total = values.reduce((sum: number, value: number): number => { return sum + value; });`, construct: "ReduceWithoutInitial", position: graph.Position{Line: 1, Column: 52}},
+		{name: "reduce composite", source: `interface Box { total: number; } const values: number[] = [1]; const box: Box = values.reduce((acc: Box, value: number): Box => { acc.total = acc.total + value; return acc; }, { total: 0 });`, construct: "ReduceCompositeAccumulator", position: graph.Position{Line: 1, Column: 88}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := Extract(extractSourcePath, test.source)
+			if result.Program != nil || len(result.Diagnostics) != 1 || result.Diagnostics[0].Construct != test.construct || result.Diagnostics[0].Position != test.position {
+				t.Fatalf("result: program=%v diagnostics=%v, want %s", result.Program, result.Diagnostics, test.construct)
+			}
+		})
+	}
+}
+
+func TestExtractFencesForEachUsedAsAValue(t *testing.T) {
+	t.Parallel()
+	result := Extract(extractSourcePath, `const values: number[] = [1];
+const result: void = values.forEach((value: number): void => { console.log(value); });`)
+	if result.Program != nil || len(result.Diagnostics) != 1 {
+		t.Fatalf("forEach value result: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+	diagnostic := result.Diagnostics[0]
+	if diagnostic.Construct != "ForEachValue" || diagnostic.Position != (graph.Position{Line: 2, Column: 22}) {
+		t.Fatalf("diagnostic: got %#v, want ForEachValue at 2:22", diagnostic)
+	}
+}
+
+func TestExtractFencesUnsupportedCallbackValueForms(t *testing.T) {
+	t.Parallel()
+	tests := []string{
+		`function make(): (value: number) => number { return (value: number): number => { return value; }; }
+function apply(callback: (value: number) => number): number { return callback(1); }
+const result: number = apply(make());`,
+		`const values: number[] = [1];
+const callbacks: (() => number)[] = values.map((value: number): () => number => { return (): number => { return value; }; });`,
+	}
+	for _, source := range tests {
+		result := Extract(extractSourcePath, source)
+		if result.Program != nil || len(result.Diagnostics) != 1 || result.Diagnostics[0].Construct != "FunctionValue" || result.Diagnostics[0].Position.Line < 1 || result.Diagnostics[0].Position.Column < 1 {
+			t.Fatalf("unsupported callback value result: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+		}
+	}
+}
+
 func TestExtractFencesUnsupportedArrayMethodsAtTheMethodName(t *testing.T) {
 	t.Parallel()
 	for _, method := range []string{"pop", "shift", "reverse"} {
@@ -460,7 +534,7 @@ func TestExtractFencesUnsupportedArrayMethodsAtTheMethodName(t *testing.T) {
 				t.Fatalf("unsupported method result: program=%v diagnostics=%v", result.Program, result.Diagnostics)
 			}
 			diagnostic := result.Diagnostics[0]
-			if diagnostic.Position != (graph.Position{Line: 2, Column: 8}) || !diagnosticNamesConstruct(diagnostic, method) {
+			if diagnostic.Construct != "ArrayMethodCall" || diagnostic.Position != (graph.Position{Line: 2, Column: 8}) || !diagnosticNamesConstruct(diagnostic, method) {
 				t.Fatalf("diagnostic: got %#v, want %s at 2:8", diagnostic, method)
 			}
 		})
@@ -513,6 +587,26 @@ console.log(fromDeclaration);`)
 	printStatement := statementOfKind(t, result.Program, graph.StatementPrint)
 	if len(printStatement.Arguments) != 1 || printStatement.Arguments[0].Kind != graph.ExpressionIdentifier {
 		t.Fatalf("console.log statement: got %#v, want identifier argument", printStatement.Arguments)
+	}
+}
+
+func TestExtractFencesSelfReferentialArrowAtTheReference(t *testing.T) {
+	t.Parallel()
+
+	result := Extract(extractSourcePath, `const factorial = (value: number): number => {
+  if (value === 0) { return 1; }
+  return value * factorial(value - 1);
+};`)
+	if result.Program != nil || len(result.Diagnostics) != 1 {
+		t.Fatalf("self-referential arrow result: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+	diagnostic := result.Diagnostics[0]
+	if diagnostic.Construct != "SelfReferentialArrow" || diagnostic.Position != (graph.Position{Line: 3, Column: 18}) {
+		t.Fatalf("diagnostic: got %#v, want SelfReferentialArrow at 3:18", diagnostic)
+	}
+	parenthesized := Extract(extractSourcePath, `const recurse = ((value: number): number => { return recurse(value - 1); });`)
+	if parenthesized.Program != nil || len(parenthesized.Diagnostics) != 1 || parenthesized.Diagnostics[0].Construct != "SelfReferentialArrow" {
+		t.Fatalf("parenthesized self-referential arrow result: program=%v diagnostics=%v", parenthesized.Program, parenthesized.Diagnostics)
 	}
 }
 

@@ -173,6 +173,17 @@ type Expression struct {
 	Properties  []PropertyValue
 }
 
+// IsCallbackArrayMethod reports whether name uses the callback iteration
+// protocol shared across extraction, evidence selection, and emission.
+func IsCallbackArrayMethod(name string) bool {
+	switch name {
+	case "forEach", "map", "filter", "some", "every", "findIndex", "reduce":
+		return true
+	default:
+		return false
+	}
+}
+
 // Diagnostic is the single clean fence returned when extraction cannot
 // preserve a source construct's semantics in this slice.
 type Diagnostic struct {
