@@ -77,6 +77,7 @@ func Extract(sourcePath string, source string) graph.Result {
 		file:          file,
 		checker:       typeChecker,
 		bindings:      make(map[*ast.Symbol]graph.BindingID),
+		bindingTypes:  make(map[graph.BindingID]graph.Type),
 		nextBinding:   1,
 		shapeIDs:      make(map[*ast.Symbol]graph.ShapeID),
 		shapeBuilding: make(map[*ast.Symbol]bool),
@@ -115,11 +116,13 @@ type builder struct {
 	file          *ast.SourceFile
 	checker       *checker.Checker
 	bindings      map[*ast.Symbol]graph.BindingID
+	bindingTypes  map[graph.BindingID]graph.Type
 	nextBinding   graph.BindingID
 	shapes        []graph.Shape
 	shapeIDs      map[*ast.Symbol]graph.ShapeID
 	shapeBuilding map[*ast.Symbol]bool
 	returnType    *graph.Type
+	literalSlot   *graph.Type
 }
 
 type fenceError struct {
@@ -319,6 +322,7 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 		if fence != nil {
 			return nil, fence
 		}
+		b.bindingTypes[binding] = valueType
 		body, fence := b.statementBody(data.Statement)
 		if fence != nil {
 			return nil, fence
@@ -349,7 +353,10 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 		var value *graph.Expression
 		var fence *fenceError
 		if data.Expression != nil {
-			value, fence = b.expression(data.Expression)
+			if b.returnType == nil {
+				return nil, b.fenceWithMessage(node, "return outside a supported function")
+			}
+			value, fence = b.expressionForSlot(data.Expression, *b.returnType)
 			if fence != nil {
 				return nil, fence
 			}
@@ -358,9 +365,6 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 			}
 			if value.Kind == graph.ExpressionMethodCall && value.Name == "forEach" {
 				return nil, b.fenceDiagnostic(data.Expression, "ForEachValue", "unsupported construct ForEachValue: forEach is statement-only")
-			}
-			if b.returnType == nil {
-				return nil, b.fenceWithMessage(node, "return outside a supported function")
 			}
 			if !slotAccepts(*b.returnType, value) {
 				return nil, b.typeFlowFence(data.Expression, *b.returnType, value.Type)
@@ -421,16 +425,25 @@ func (b *builder) variableDeclarations(node *ast.Node) ([]*graph.Statement, *fen
 				return nil, b.fenceDiagnostic(reference, "SelfReferentialArrow", "unsupported construct SelfReferentialArrow: arrow references its own binding")
 			}
 		}
-		value, fence := b.expression(declaration.Initializer)
+		var value *graph.Expression
+		var valueType graph.Type
+		var fence *fenceError
+		if declaration.Type != nil {
+			valueType, fence = b.checkedType(nameNode)
+			if fence == nil {
+				value, fence = b.expressionForSlot(declaration.Initializer, valueType)
+			}
+		} else {
+			value, fence = b.expression(declaration.Initializer)
+			if fence == nil {
+				valueType, fence = b.checkedType(nameNode)
+			}
+		}
 		if fence != nil {
 			return nil, fence
 		}
 		if value.Kind == graph.ExpressionMethodCall && value.Name == "forEach" {
 			return nil, b.fenceDiagnostic(declaration.Initializer, "ForEachValue", "unsupported construct ForEachValue: forEach is statement-only")
-		}
-		valueType, fence := b.checkedType(nameNode)
-		if fence != nil {
-			return nil, fence
 		}
 		if valueType.Kind == graph.TypeFunction && declaration.Initializer.Kind == ast.KindIdentifier && b.supportedCallValue(declaration.Initializer, make(map[*ast.Symbol]bool)) {
 			return nil, b.fenceDiagnostic(declaration.Initializer, "FunctionAlias", "unsupported function-valued storage alias")
@@ -443,6 +456,7 @@ func (b *builder) variableDeclarations(node *ast.Node) ([]*graph.Statement, *fen
 		if fence != nil {
 			return nil, fence
 		}
+		b.bindingTypes[binding] = valueType
 		result = append(result, &graph.Statement{
 			Kind:     graph.StatementVariable,
 			Position: b.position(declarationNode),
@@ -499,6 +513,7 @@ func (b *builder) functionDeclaration(node *ast.Node) (*graph.Statement, *fenceE
 	if functionType.Kind != graph.TypeFunction || functionType.Result == nil {
 		return nil, b.fence(node)
 	}
+	applyParameterBoundaryOptionality(&functionType, parameters)
 	binding, fence := b.binding(nameNode)
 	if fence != nil {
 		return nil, fence
@@ -530,9 +545,6 @@ func (b *builder) parameters(nodes []*ast.Node) ([]graph.Parameter, *fenceError)
 		}
 		data := node.AsParameterDeclaration()
 		nameNode := data.Name()
-		if data.Initializer != nil {
-			return nil, b.fenceDiagnostic(data.Initializer, "ParameterDefault", "unsupported construct ParameterDefault")
-		}
 		if nameNode == nil || nameNode.Kind != ast.KindIdentifier || data.Modifiers() != nil || data.DotDotDotToken != nil {
 			return nil, b.fence(node)
 		}
@@ -551,15 +563,32 @@ func (b *builder) parameters(nodes []*ast.Node) ([]graph.Parameter, *fenceError)
 			}
 			parameterType.Optional = true
 		}
+		bodyType := parameterType
+		boundaryOptional := parameterType.Optional
+		var defaultValue *graph.Expression
+		if data.Initializer != nil {
+			bodyType.Optional = false
+			boundaryOptional = true
+			defaultValue, fence = b.expressionForSlot(data.Initializer, bodyType)
+			if fence != nil {
+				return nil, fence
+			}
+			if !slotAccepts(bodyType, defaultValue) {
+				return nil, b.typeFlowFence(data.Initializer, bodyType, defaultValue.Type)
+			}
+		}
 		binding, fence := b.binding(nameNode)
 		if fence != nil {
 			return nil, fence
 		}
+		b.bindingTypes[binding] = bodyType
 		parameters = append(parameters, graph.Parameter{
-			Position: b.position(node),
-			Binding:  binding,
-			Name:     nameNode.Text(),
-			Type:     parameterType,
+			Position:         b.position(node),
+			Binding:          binding,
+			Name:             nameNode.Text(),
+			Type:             bodyType,
+			BoundaryOptional: boundaryOptional,
+			Default:          defaultValue,
 		})
 	}
 	return parameters, nil
@@ -620,6 +649,11 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 
 	case ast.KindObjectLiteralExpression:
 		contextualType := b.checker.GetContextualType(node, checker.ContextFlagsNone)
+		if b.literalSlot != nil && b.literalSlot.Kind == graph.TypeObject {
+			valueType := *b.literalSlot
+			valueType.Optional = false
+			return b.objectLiteral(node, valueType)
+		}
 		if contextualType == nil {
 			return nil, b.fenceWithMessage(node, "unsupported anonymous shape")
 		}
@@ -630,60 +664,15 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		if valueType.Kind != graph.TypeObject {
 			return nil, b.fenceWithMessage(node, "object literal requires one named shape")
 		}
-		// A present literal has the inner type even when its contextual storage
-		// slot is T | undefined; the slot is where Some is introduced.
 		valueType.Optional = false
-		shape, ok := b.shapeByID(valueType.Shape)
-		if !ok {
-			return nil, b.fenceWithMessage(node, "object literal shape was not registered")
-		}
-		properties := node.AsObjectLiteralExpression().Properties.Nodes
-		values := make([]graph.PropertyValue, 0, len(shape.Fields))
-		propertyIndex := 0
-		for index, field := range shape.Fields {
-			if propertyIndex >= len(properties) {
-				if !field.Type.Optional {
-					return nil, b.fenceWithMessage(node, "object literal fields must match named declaration order")
-				}
-				values = append(values, graph.PropertyValue{Position: b.position(node), Name: field.Name, Value: &graph.Expression{Kind: graph.ExpressionUndefined, Position: b.position(node), Type: field.Type}})
-				continue
-			}
-			propertyNode := properties[propertyIndex]
-			if propertyNode.Kind != ast.KindPropertyAssignment {
-				return nil, b.fence(propertyNode)
-			}
-			property := propertyNode.AsPropertyAssignment()
-			name := property.Name()
-			if property.Modifiers() != nil || property.PostfixToken != nil || property.Type != nil || name == nil || name.Kind != ast.KindIdentifier {
-				return nil, b.fenceWithMessage(propertyNode, "object literal fields must match named declaration order")
-			}
-			if name.Text() != field.Name {
-				if !field.Type.Optional {
-					return nil, b.fenceWithMessage(propertyNode, "object literal fields must match named declaration order")
-				}
-				values = append(values, graph.PropertyValue{Position: b.position(node), Name: field.Name, Value: &graph.Expression{Kind: graph.ExpressionUndefined, Position: b.position(node), Type: field.Type}})
-				continue
-			}
-			value, fence := b.expression(property.Initializer)
-			if fence != nil {
-				return nil, fence
-			}
-			if fence := b.functionValueFence(property.Initializer, value); fence != nil {
-				return nil, fence
-			}
-			if !slotAccepts(shape.Fields[index].Type, value) {
-				return nil, b.typeFlowFence(property.Initializer, shape.Fields[index].Type, value.Type)
-			}
-			adaptUndefinedToSlot(shape.Fields[index].Type, value)
-			values = append(values, graph.PropertyValue{Position: b.position(propertyNode), Name: name.Text(), Value: value})
-			propertyIndex++
-		}
-		if propertyIndex != len(properties) {
-			return nil, b.fenceWithMessage(properties[propertyIndex], "object literal fields must match named declaration order")
-		}
-		return &graph.Expression{Kind: graph.ExpressionObject, Position: b.position(node), Type: valueType, Properties: values}, nil
+		return b.objectLiteral(node, valueType)
 
 	case ast.KindArrayLiteralExpression:
+		if b.literalSlot != nil && b.literalSlot.Kind == graph.TypeArray {
+			valueType := *b.literalSlot
+			valueType.Optional = false
+			return b.arrayLiteral(node, valueType)
+		}
 		contextualType := b.checker.GetContextualType(node, checker.ContextFlagsNone)
 		if contextualType == nil {
 			return nil, b.fenceWithMessage(node, "array literal requires a contextual array type")
@@ -692,35 +681,28 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		if fence != nil {
 			return nil, fence
 		}
-		if valueType.Kind != graph.TypeArray || valueType.Element == nil {
-			return nil, b.fenceWithMessage(node, "array literal requires a contextual array type")
-		}
 		valueType.Optional = false
-		elements := make([]*graph.Expression, 0, len(node.AsArrayLiteralExpression().Elements.Nodes))
-		for _, elementNode := range node.AsArrayLiteralExpression().Elements.Nodes {
-			if elementNode.Kind == ast.KindSpreadElement || elementNode.Kind == ast.KindOmittedExpression {
-				return nil, b.fence(elementNode)
-			}
-			element, fence := b.expression(elementNode)
-			if fence != nil {
-				return nil, fence
-			}
-			if fence := b.functionValueFence(elementNode, element); fence != nil {
-				return nil, fence
-			}
-			if !sameType(*valueType.Element, element.Type) {
-				return nil, b.typeFlowFence(elementNode, *valueType.Element, element.Type)
-			}
-			elements = append(elements, element)
+		return b.arrayLiteral(node, valueType)
+
+	case ast.KindNonNullExpression:
+		operand, fence := b.expression(node.AsNonNullExpression().Expression)
+		if fence != nil {
+			return nil, fence
 		}
-		return &graph.Expression{Kind: graph.ExpressionArray, Position: b.position(node), Type: valueType, Expressions: elements}, nil
+		needsUnwrap := operand.Type.Optional || operand.UnwrapOptional
+		valueType, fence := b.checkedType(node)
+		if fence != nil {
+			return nil, fence
+		}
+		operand.Type = valueType
+		operand.UnwrapOptional = needsUnwrap
+		operand.NonNullAssertion = true
+		return operand, nil
 
 	case ast.KindPropertyAccessExpression:
 		data := node.AsPropertyAccessExpression()
 		name := data.Name()
-		if data.QuestionDotToken != nil {
-			return nil, b.fenceDiagnostic(data.QuestionDotToken, "OptionalChain", "unsupported construct OptionalChain")
-		}
+		chain := node.Flags&ast.NodeFlagsOptionalChain != 0
 		if name == nil || name.Kind != ast.KindIdentifier {
 			return nil, b.fence(node)
 		}
@@ -732,7 +714,11 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			if name.Text() != "length" {
 				return nil, b.fenceWithMessage(name, "unsupported array method or property "+name.Text())
 			}
-			return &graph.Expression{Kind: graph.ExpressionArrayLength, Position: b.position(node), Type: graph.Type{Kind: graph.TypeNumber}, Receiver: receiver, Name: name.Text()}, nil
+			valueType := graph.Type{Kind: graph.TypeNumber}
+			if chain && receiver.Type.Optional {
+				valueType.Optional = true
+			}
+			return &graph.Expression{Kind: graph.ExpressionArrayLength, Position: b.position(node), Type: valueType, Receiver: receiver, Name: name.Text(), OptionalChain: chain}, nil
 		}
 		if receiver.Type.Kind != graph.TypeObject {
 			return nil, b.fence(node)
@@ -741,17 +727,20 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		if !ok || b.checker.GetSymbolAtLocation(name) == nil {
 			return nil, b.fenceWithMessage(name, "property is not declared on the named shape")
 		}
-		useType, unwrapOptional, fence := b.optionalUseType(node, field.Type)
-		if fence != nil {
-			return nil, fence
+		useType := field.Type
+		unwrapOptional := false
+		if chain && receiver.Type.Optional {
+			useType.Optional = true
+		} else {
+			useType, unwrapOptional, fence = b.optionalUseType(node, field.Type)
+			if fence != nil {
+				return nil, fence
+			}
 		}
-		return &graph.Expression{Kind: graph.ExpressionProperty, Position: b.position(node), Type: useType, Receiver: receiver, Name: name.Text(), UnwrapOptional: unwrapOptional}, nil
+		return &graph.Expression{Kind: graph.ExpressionProperty, Position: b.position(node), Type: useType, Receiver: receiver, Name: name.Text(), UnwrapOptional: unwrapOptional, OptionalChain: chain, ChainResultOptional: field.Type.Optional}, nil
 
 	case ast.KindElementAccessExpression:
 		data := node.AsElementAccessExpression()
-		if data.QuestionDotToken != nil {
-			return nil, b.fenceDiagnostic(data.QuestionDotToken, "OptionalChain", "unsupported construct OptionalChain")
-		}
 		if data.ArgumentExpression == nil {
 			return nil, b.fence(node)
 		}
@@ -769,7 +758,12 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		if index.Type.Kind != graph.TypeNumber {
 			return nil, b.fenceWithMessage(data.ArgumentExpression, "array index must be a number")
 		}
-		return &graph.Expression{Kind: graph.ExpressionIndex, Position: b.position(node), Type: *receiver.Type.Element, Receiver: receiver, Index: index}, nil
+		valueType := *receiver.Type.Element
+		chain := node.Flags&ast.NodeFlagsOptionalChain != 0
+		if chain && receiver.Type.Optional {
+			valueType.Optional = true
+		}
+		return &graph.Expression{Kind: graph.ExpressionIndex, Position: b.position(node), Type: valueType, Receiver: receiver, Index: index, OptionalChain: chain, ChainResultOptional: receiver.Type.Element.Optional}, nil
 
 	case ast.KindBinaryExpression:
 		return b.binaryExpression(node)
@@ -921,6 +915,93 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 	return nil, b.fence(node)
 }
 
+func (b *builder) expressionForSlot(node *ast.Node, slot graph.Type) (*graph.Expression, *fenceError) {
+	previous := b.literalSlot
+	b.literalSlot = &slot
+	value, fence := b.expression(node)
+	b.literalSlot = previous
+	return value, fence
+}
+
+func (b *builder) objectLiteral(node *ast.Node, valueType graph.Type) (*graph.Expression, *fenceError) {
+	if valueType.Kind != graph.TypeObject {
+		return nil, b.fenceWithMessage(node, "object literal requires one named shape")
+	}
+	shape, ok := b.shapeByID(valueType.Shape)
+	if !ok {
+		return nil, b.fenceWithMessage(node, "object literal shape was not registered")
+	}
+	properties := node.AsObjectLiteralExpression().Properties.Nodes
+	values := make([]graph.PropertyValue, 0, len(shape.Fields))
+	propertyIndex := 0
+	for index, field := range shape.Fields {
+		if propertyIndex >= len(properties) {
+			if !field.Type.Optional {
+				return nil, b.fenceWithMessage(node, "object literal fields must match named declaration order")
+			}
+			values = append(values, graph.PropertyValue{Position: b.position(node), Name: field.Name, Value: &graph.Expression{Kind: graph.ExpressionUndefined, Position: b.position(node), Type: field.Type}})
+			continue
+		}
+		propertyNode := properties[propertyIndex]
+		if propertyNode.Kind != ast.KindPropertyAssignment {
+			return nil, b.fence(propertyNode)
+		}
+		property := propertyNode.AsPropertyAssignment()
+		name := property.Name()
+		if property.Modifiers() != nil || property.PostfixToken != nil || property.Type != nil || name == nil || name.Kind != ast.KindIdentifier {
+			return nil, b.fenceWithMessage(propertyNode, "object literal fields must match named declaration order")
+		}
+		if name.Text() != field.Name {
+			if !field.Type.Optional {
+				return nil, b.fenceWithMessage(propertyNode, "object literal fields must match named declaration order")
+			}
+			values = append(values, graph.PropertyValue{Position: b.position(node), Name: field.Name, Value: &graph.Expression{Kind: graph.ExpressionUndefined, Position: b.position(node), Type: field.Type}})
+			continue
+		}
+		value, fence := b.expressionForSlot(property.Initializer, shape.Fields[index].Type)
+		if fence != nil {
+			return nil, fence
+		}
+		if fence := b.functionValueFence(property.Initializer, value); fence != nil {
+			return nil, fence
+		}
+		if !slotAccepts(shape.Fields[index].Type, value) {
+			return nil, b.typeFlowFence(property.Initializer, shape.Fields[index].Type, value.Type)
+		}
+		adaptUndefinedToSlot(shape.Fields[index].Type, value)
+		values = append(values, graph.PropertyValue{Position: b.position(propertyNode), Name: name.Text(), Value: value})
+		propertyIndex++
+	}
+	if propertyIndex != len(properties) {
+		return nil, b.fenceWithMessage(properties[propertyIndex], "object literal fields must match named declaration order")
+	}
+	return &graph.Expression{Kind: graph.ExpressionObject, Position: b.position(node), Type: valueType, Properties: values}, nil
+}
+
+func (b *builder) arrayLiteral(node *ast.Node, valueType graph.Type) (*graph.Expression, *fenceError) {
+	if valueType.Kind != graph.TypeArray || valueType.Element == nil {
+		return nil, b.fenceWithMessage(node, "array literal requires a contextual array type")
+	}
+	elements := make([]*graph.Expression, 0, len(node.AsArrayLiteralExpression().Elements.Nodes))
+	for _, elementNode := range node.AsArrayLiteralExpression().Elements.Nodes {
+		if elementNode.Kind == ast.KindSpreadElement || elementNode.Kind == ast.KindOmittedExpression {
+			return nil, b.fence(elementNode)
+		}
+		element, fence := b.expressionForSlot(elementNode, *valueType.Element)
+		if fence != nil {
+			return nil, fence
+		}
+		if fence := b.functionValueFence(elementNode, element); fence != nil {
+			return nil, fence
+		}
+		if !sameType(*valueType.Element, element.Type) {
+			return nil, b.typeFlowFence(elementNode, *valueType.Element, element.Type)
+		}
+		elements = append(elements, element)
+	}
+	return &graph.Expression{Kind: graph.ExpressionArray, Position: b.position(node), Type: valueType, Expressions: elements}, nil
+}
+
 func (b *builder) functionValueFence(node *ast.Node, expression *graph.Expression) *fenceError {
 	if expression == nil || expression.Type.Kind != graph.TypeFunction {
 		return nil
@@ -940,7 +1021,10 @@ func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceErro
 	accessNode := call.Expression
 	access := accessNode.AsPropertyAccessExpression()
 	nameNode := access.Name()
-	if access.QuestionDotToken != nil || nameNode == nil || nameNode.Kind != ast.KindIdentifier {
+	if call.QuestionDotToken != nil {
+		return nil, b.fenceDiagnostic(call.QuestionDotToken, "OptionalChain", "unsupported construct OptionalChain: optional function call")
+	}
+	if nameNode == nil || nameNode.Kind != ast.KindIdentifier {
 		return nil, b.fence(accessNode)
 	}
 	receiver, fence := b.expression(access.Expression)
@@ -1040,13 +1124,16 @@ func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceErro
 	}
 	if len(arguments) > 0 && arguments[0].Type.Kind == graph.TypeFunction {
 		callback := arguments[0].Type
+		accepts := func(parameter, value graph.Type) bool {
+			return sameType(parameter, value) || (parameter.Optional && sameInnerType(parameter, value))
+		}
 		if method == "reduce" {
 			accumulator := arguments[1].Type
-			if !sameType(callback.Parameters[0], accumulator) || !sameType(callback.Parameters[1], *receiver.Type.Element) || !sameType(*callback.Result, accumulator) {
+			if !accepts(callback.Parameters[0], accumulator) || !accepts(callback.Parameters[1], *receiver.Type.Element) || !sameType(*callback.Result, accumulator) {
 				return nil, b.fenceWithMessage(call.Arguments.Nodes[0], "reduce callback signature does not match accumulator and element types")
 			}
 		} else {
-			if !sameType(callback.Parameters[0], *receiver.Type.Element) || (len(callback.Parameters) == 2 && callback.Parameters[1].Kind != graph.TypeNumber) {
+			if !accepts(callback.Parameters[0], *receiver.Type.Element) || (len(callback.Parameters) == 2 && callback.Parameters[1].Kind != graph.TypeNumber) {
 				return nil, b.fenceWithMessage(call.Arguments.Nodes[0], "array callback signature does not match element and index types")
 			}
 			if (method == "filter" || method == "some" || method == "every" || method == "findIndex" || method == "find") && callback.Result.Kind != graph.TypeBoolean {
@@ -1057,14 +1144,51 @@ func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceErro
 	if method == "map" && valueType.Kind == graph.TypeArray && valueType.Element != nil && valueType.Element.Kind == graph.TypeFunction {
 		return nil, b.fenceDiagnostic(nameNode, "FunctionValue", "unsupported construct FunctionValue: map result stores function values in array elements")
 	}
-	return &graph.Expression{Kind: graph.ExpressionMethodCall, Position: b.position(node), Type: valueType, Receiver: receiver, Name: method, Arguments: arguments}, nil
+	chain := node.Flags&ast.NodeFlagsOptionalChain != 0
+	methodResultOptional := method == "pop" || method == "shift" || method == "find"
+	if chain && receiver.Type.Optional {
+		valueType.Optional = true
+	}
+	return &graph.Expression{Kind: graph.ExpressionMethodCall, Position: b.position(node), Type: valueType, Receiver: receiver, Name: method, Arguments: arguments, OptionalChain: chain, ChainResultOptional: methodResultOptional}, nil
 }
 
 func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceError) {
 	data := node.AsBinaryExpression()
 	operatorKind := data.OperatorToken.Kind
-	if operatorKind == ast.KindQuestionQuestionToken || operatorKind == ast.KindQuestionQuestionEqualsToken {
-		return nil, b.fenceDiagnostic(data.OperatorToken, "NullishCoalescing", "unsupported construct NullishCoalescing")
+	if operatorKind == ast.KindQuestionQuestionEqualsToken {
+		return nil, b.fenceDiagnostic(data.OperatorToken, "NullishAssignment", "unsupported construct NullishAssignment")
+	}
+	if operatorKind == ast.KindQuestionQuestionToken {
+		left, fence := b.expression(data.Left)
+		if fence != nil {
+			return nil, fence
+		}
+		if left.UnwrapOptional {
+			left.UnwrapOptional = false
+			switch left.Kind {
+			case graph.ExpressionIdentifier:
+				if declared, ok := b.bindingTypes[left.Binding]; ok && declared.Optional {
+					left.Type = declared
+				}
+			case graph.ExpressionProperty:
+				if left.Receiver != nil {
+					if field, ok := b.shapeField(left.Receiver.Type.Shape, left.Name); ok && field.Type.Optional {
+						left.Type = field.Type
+					}
+				}
+			}
+		}
+		valueType := left.Type
+		valueType.Optional = checkerTypeIncludesUndefined(b.checker.GetTypeAtLocation(node))
+		right, fence := b.expressionForSlot(data.Right, valueType)
+		if fence != nil {
+			return nil, fence
+		}
+		if !left.Type.Optional || (!sameInnerType(left.Type, valueType) && !sameType(left.Type, valueType)) || (!slotAccepts(valueType, right) && !sameType(valueType, right.Type)) {
+			return nil, b.fenceDiagnostic(data.OperatorToken, "NullishCoalescing", "unsupported construct NullishCoalescing: operands do not share one optional inner type")
+		}
+		adaptUndefinedToSlot(valueType, right)
+		return &graph.Expression{Kind: graph.ExpressionNullish, Position: b.position(node), Type: valueType, Left: left, Right: right}, nil
 	}
 	if operator, ok := assignmentOperator(operatorKind); ok {
 		if data.Left.Kind != ast.KindIdentifier && data.Left.Kind != ast.KindPropertyAccessExpression && data.Left.Kind != ast.KindElementAccessExpression {
@@ -1073,32 +1197,47 @@ func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceErr
 		if data.Left.Kind != ast.KindIdentifier && operator != "=" {
 			return nil, b.fenceWithMessage(data.Left, "unsupported compound composite assignment")
 		}
-		left, fence := b.expression(data.Left)
-		if fence != nil {
-			return nil, fence
-		}
+		var left *graph.Expression
+		var fence *fenceError
 		if data.Left.Kind == ast.KindIdentifier {
 			symbol := b.checker.GetSymbolAtLocation(data.Left)
-			if symbol != nil {
-				declared, declaredFence := b.graphType(b.checker.GetTypeOfSymbol(symbol), data.Left)
+			if symbol == nil {
+				return nil, b.fence(data.Left)
+			}
+			binding, bindingFence := b.binding(data.Left)
+			if bindingFence != nil {
+				return nil, bindingFence
+			}
+			declared, ok := b.bindingTypes[binding]
+			if !ok {
+				declaredType := b.checker.GetTypeOfSymbol(symbol)
+				var declaredFence *fenceError
+				declared, declaredFence = b.graphType(declaredType, data.Left)
 				if declaredFence != nil {
 					return nil, declaredFence
 				}
-				left.Type = declared
-				left.UnwrapOptional = false
 			}
-		} else if data.Left.Kind == ast.KindPropertyAccessExpression && left.Receiver != nil && left.Receiver.Type.Kind == graph.TypeObject {
+			left = &graph.Expression{Kind: graph.ExpressionIdentifier, Position: b.position(data.Left), Binding: binding, Type: declared, Name: data.Left.Text()}
+		} else {
+			left, fence = b.expression(data.Left)
+			if fence != nil {
+				return nil, fence
+			}
+		}
+		if data.Left.Kind == ast.KindPropertyAccessExpression && left.Receiver != nil && left.Receiver.Type.Kind == graph.TypeObject {
 			if field, ok := b.shapeField(left.Receiver.Type.Shape, left.Name); ok {
 				left.Type = field.Type
 				left.UnwrapOptional = false
 			}
 		}
-		right, fence := b.expression(data.Right)
+		right, fence := b.expressionForSlot(data.Right, left.Type)
 		if fence != nil {
 			return nil, fence
 		}
 		var valueType graph.Type
-		if b.checker.GetTypeAtLocation(node).Flags()&checker.TypeFlagsUndefined != 0 && left.Type.Optional {
+		if operator == "=" && right.Kind != graph.ExpressionUndefined {
+			valueType = right.Type
+		} else if b.checker.GetTypeAtLocation(node).Flags()&checker.TypeFlagsUndefined != 0 && left.Type.Optional {
 			valueType = left.Type
 		} else {
 			valueType, fence = b.checkedType(node)
@@ -1134,6 +1273,13 @@ func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceErr
 	if fence != nil {
 		return nil, fence
 	}
+	if (operator == "&&" || operator == "||") && (left.Type.Optional || right.Type.Optional) {
+		operand := data.Left
+		if !left.Type.Optional {
+			operand = data.Right
+		}
+		return nil, b.fenceDiagnostic(operand, "NonBooleanCondition", "unsupported non-boolean condition")
+	}
 	valueType, fence := b.checkedType(node)
 	if fence != nil {
 		return nil, fence
@@ -1152,9 +1298,19 @@ func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceErr
 		right.UnwrapOptional = false
 		right.Type.Optional = true
 	}
+	if (operator == "===" || operator == "!==") && left.UnwrapOptional && sameInnerType(left.Type, right.Type) {
+		left.UnwrapOptional = false
+		left.Type.Optional = true
+	}
+	if (operator == "===" || operator == "!==") && right.UnwrapOptional && sameInnerType(left.Type, right.Type) {
+		right.UnwrapOptional = false
+		right.Type.Optional = true
+	}
 	optionalUndefinedEquality := (operator == "===" || operator == "!==") &&
 		((left.Type.Optional && right.Kind == graph.ExpressionUndefined) || (right.Type.Optional && left.Kind == graph.ExpressionUndefined))
-	if !optionalUndefinedEquality && !validBinary(operator, left.Type, right.Type, valueType) {
+	optionalValueEquality := (operator == "===" || operator == "!==") &&
+		(left.Type.Optional || right.Type.Optional) && sameInnerType(left.Type, right.Type)
+	if !optionalUndefinedEquality && !optionalValueEquality && !validBinary(operator, left.Type, right.Type, valueType) {
 		return nil, b.fence(node)
 	}
 	return &graph.Expression{
@@ -1165,6 +1321,31 @@ func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceErr
 		Left:     left,
 		Right:    right,
 	}, nil
+}
+
+func checkerTypeIncludesUndefined(value *checker.Type) bool {
+	if value == nil {
+		return false
+	}
+	if value.Flags()&checker.TypeFlagsUndefined != 0 {
+		return true
+	}
+	if value.Flags()&checker.TypeFlagsUnion != 0 {
+		for _, constituent := range value.Types() {
+			if checkerTypeIncludesUndefined(constituent) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func applyParameterBoundaryOptionality(functionType *graph.Type, parameters []graph.Parameter) {
+	for index := range parameters {
+		if index < len(functionType.Parameters) && parameters[index].BoundaryOptional {
+			functionType.Parameters[index].Optional = true
+		}
+	}
 }
 
 func (b *builder) shapeByID(id graph.ShapeID) (graph.Shape, bool) {
@@ -1236,6 +1417,7 @@ func (b *builder) arrowExpression(node *ast.Node) (*graph.Expression, *fenceErro
 	if functionType.Kind != graph.TypeFunction || functionType.Result == nil {
 		return nil, b.fence(node)
 	}
+	applyParameterBoundaryOptionality(&functionType, parameters)
 	previousReturnType := b.returnType
 	b.returnType = functionType.Result
 	body, fence := b.statements(data.Body.AsBlock().Statements.Nodes, false)
@@ -1436,6 +1618,9 @@ func (b *builder) validateTypeNode(node *ast.Node) *fenceError {
 
 func (b *builder) graphType(value *checker.Type, node *ast.Node) (graph.Type, *fenceError) {
 	flags := value.Flags()
+	if flags&checker.TypeFlagsNever != 0 {
+		return graph.Type{}, b.fenceDiagnostic(node, "UnreachableUse", "unsupported construct UnreachableUse")
+	}
 	if flags&checker.TypeFlagsUnion != 0 {
 		var inner *graph.Type
 		hasUndefined := false
@@ -1523,6 +1708,14 @@ func (b *builder) graphType(value *checker.Type, node *ast.Node) (graph.Type, *f
 		parameterType, fence := b.graphType(b.checker.GetTypeOfSymbol(parameter), node)
 		if fence != nil {
 			return graph.Type{}, fence
+		}
+		for _, declaration := range parameter.Declarations {
+			if declaration.Kind == ast.KindParameter {
+				data := declaration.AsParameterDeclaration()
+				if data.QuestionToken != nil || data.Initializer != nil {
+					parameterType.Optional = true
+				}
+			}
 		}
 		parameterTypes = append(parameterTypes, parameterType)
 	}

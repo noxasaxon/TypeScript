@@ -550,12 +550,9 @@ func TestExtractFencesOptionalBoundariesWithNamedPositions(t *testing.T) {
 		{name: "optional void", source: `let value: void | undefined = undefined;`, construct: "UnsupportedUnion", position: graph.Position{Line: 1, Column: 12}},
 		{name: "null", source: `let value: number | null = null;`, construct: "UnsupportedUnion", position: graph.Position{Line: 1, Column: 12}},
 		{name: "optional element", source: `const values: (number | undefined)[] = [undefined];`, construct: "OptionalElement", position: graph.Position{Line: 1, Column: 15}},
-		{name: "optional chain", source: `interface Point { x: number; } let point: Point | undefined = { x: 1 }; const value = point?.x;`, construct: "OptionalChain", position: graph.Position{Line: 1, Column: 92}},
-		{name: "nullish coalescing", source: `const value: number | undefined = undefined; const result = value ?? 1;`, construct: "NullishCoalescing", position: graph.Position{Line: 1, Column: 67}},
-		{name: "parameter default", source: `function f(value: number = 1): number { return value; }`, construct: "ParameterDefault", position: graph.Position{Line: 1, Column: 28}},
 		{name: "typeof check", source: `const value: number | undefined = undefined; const missing = typeof value === "undefined";`, construct: "TypeofCheck", position: graph.Position{Line: 1, Column: 62}},
 		{name: "optional truthiness", source: `let value: number | undefined = undefined; if (value) { value = 1; }`, construct: "NonBooleanCondition", position: graph.Position{Line: 1, Column: 48}},
-		{name: "optional composite equality", source: "interface Point { x: number; }\nlet left: Point | undefined = undefined;\nlet right: Point | undefined = undefined;\nconsole.log(left === right);", construct: "BinaryExpression", position: graph.Position{Line: 4, Column: 13}},
+		{name: "optional logical operand", source: `let value: number | undefined = undefined; const result = value || 1;`, construct: "NonBooleanCondition", position: graph.Position{Line: 1, Column: 59}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -568,6 +565,57 @@ func TestExtractFencesOptionalBoundariesWithNamedPositions(t *testing.T) {
 				t.Fatalf("diagnostic: got %#v, want positioned %s", diagnostic, test.construct)
 			}
 		})
+	}
+}
+
+func TestExtractAcceptsPlan0016OptionalSyntax(t *testing.T) {
+	t.Parallel()
+	result := Extract(extractSourcePath, `interface Point { x: number; }
+interface Holder { point?: Point; }
+function choose(value: number = 2): number { return value; }
+let point: Point | undefined = undefined;
+let holder: Holder = {};
+point = { x: 1 };
+holder.point = { x: 3 };
+const chained: number | undefined = point?.x;
+const coalesced: number = chained ?? choose();
+const asserted: number = chained!;
+const alreadyPresent = asserted;
+const redundant: number = alreadyPresent!;
+const equal: boolean = chained === asserted;`)
+	if result.Program == nil || len(result.Diagnostics) != 0 {
+		t.Fatalf("plan 0016 extraction failed: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+	choose := functionStatement(t, result.Program, "choose")
+	if len(choose.Parameters) != 1 || choose.Parameters[0].Default == nil || !choose.Parameters[0].BoundaryOptional || choose.Parameters[0].Type.Optional {
+		t.Fatalf("default parameter metadata: %#v", choose.Parameters)
+	}
+	chained := variableStatement(t, result.Program, "chained").Value
+	if chained == nil || !chained.OptionalChain || chained.Kind != graph.ExpressionProperty {
+		t.Fatalf("optional chain metadata: %#v", chained)
+	}
+	if got := variableStatement(t, result.Program, "coalesced").Value; got == nil || got.Kind != graph.ExpressionNullish {
+		t.Fatalf("nullish expression: %#v", got)
+	}
+	if got := variableStatement(t, result.Program, "asserted").Value; got == nil || !got.UnwrapOptional {
+		t.Fatalf("non-null assertion: %#v", got)
+	}
+	if got := variableStatement(t, result.Program, "redundant").Value; got == nil || got.UnwrapOptional || !got.NonNullAssertion {
+		t.Fatalf("redundant non-null assertion: %#v", got)
+	}
+}
+
+func TestExtractFencesNeverTypedUseAsUnreachable(t *testing.T) {
+	t.Parallel()
+	result := Extract(extractSourcePath, `let value: number | undefined = 1;
+value = undefined;
+if (value !== undefined) { console.log(value * 2); }`)
+	if result.Program != nil || len(result.Diagnostics) != 1 {
+		t.Fatalf("result: program=%v diagnostics=%v", result.Program, result.Diagnostics)
+	}
+	diagnostic := result.Diagnostics[0]
+	if diagnostic.Construct != "UnreachableUse" || diagnostic.Position != (graph.Position{Line: 3, Column: 40}) {
+		t.Fatalf("diagnostic: got %#v, want positioned UnreachableUse", diagnostic)
 	}
 }
 

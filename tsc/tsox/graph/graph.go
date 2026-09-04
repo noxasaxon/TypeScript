@@ -78,6 +78,10 @@ type Parameter struct {
 	Binding  BindingID
 	Name     string
 	Type     Type
+	// BoundaryOptional records an optional call ABI whose body binding is Type.
+	// Default is evaluated in the callee when that ABI receives None.
+	BoundaryOptional bool
+	Default          *Expression
 }
 
 // StatementKind identifies a normalized statement form.
@@ -126,6 +130,7 @@ const (
 	ExpressionUndefined   ExpressionKind = "undefined"
 	ExpressionIdentifier  ExpressionKind = "identifier"
 	ExpressionBinary      ExpressionKind = "binary"
+	ExpressionNullish     ExpressionKind = "nullish"
 	ExpressionUnary       ExpressionKind = "unary"
 	ExpressionAssignment  ExpressionKind = "assignment"
 	ExpressionUpdate      ExpressionKind = "update"
@@ -160,23 +165,29 @@ type Expression struct {
 	// UnwrapOptional records a checker-proved use-site narrowing from the
 	// declaration's T | undefined type to T. The emitter must trap if the
 	// option is nevertheless empty at runtime.
-	UnwrapOptional bool
-	Name           string
-	Operator       string
-	Prefix         bool
-	Left           *Expression
-	Right          *Expression
-	Operand        *Expression
-	Callee         *Expression
-	Arguments      []*Expression
-	Chunks         []string
-	Expressions    []*Expression
-	Parameters     []Parameter
-	ReturnType     Type
-	Body           []*Statement
-	Receiver       *Expression
-	Index          *Expression
-	Properties     []PropertyValue
+	UnwrapOptional   bool
+	NonNullAssertion bool
+	// OptionalChain marks every access/method link in an optional chain.
+	// ChainResultOptional is the direct link's optionality before the chain
+	// contributes undefined through short-circuiting.
+	OptionalChain       bool
+	ChainResultOptional bool
+	Name                string
+	Operator            string
+	Prefix              bool
+	Left                *Expression
+	Right               *Expression
+	Operand             *Expression
+	Callee              *Expression
+	Arguments           []*Expression
+	Chunks              []string
+	Expressions         []*Expression
+	Parameters          []Parameter
+	ReturnType          Type
+	Body                []*Statement
+	Receiver            *Expression
+	Index               *Expression
+	Properties          []PropertyValue
 }
 
 // IsCallbackArrayMethod reports whether name uses the callback iteration
