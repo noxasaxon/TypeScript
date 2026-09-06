@@ -22,8 +22,11 @@ type ShapeID uint32
 
 // Position is a one-based source position suitable for diagnostics.
 type Position struct {
-	Line   int
-	Column int
+	// SourcePath identifies a dependency's original source. Empty retains the
+	// entry Program.SourcePath, including the legacy single-source API.
+	SourcePath string
+	Line       int
+	Column     int
 }
 
 // TypeKind is one of the value categories required by the current subset.

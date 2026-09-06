@@ -14,6 +14,7 @@ import (
 	"github.com/microsoft/typescript-go/internal/core"
 	"github.com/microsoft/typescript-go/internal/scanner"
 	"github.com/microsoft/typescript-go/internal/tsoptions"
+	"github.com/microsoft/typescript-go/internal/tsox/checked"
 	"github.com/microsoft/typescript-go/internal/tspath"
 	"github.com/microsoft/typescript-go/internal/vfs/vfstest"
 	"github.com/microsoft/typescript-go/tsox/graph"
@@ -49,7 +50,30 @@ func Extract(sourcePath string, source string) mutation.Result {
 	}
 	typeChecker, done := program.GetTypeChecker(ctx)
 	defer done()
+	return extractEntry(source, file, typeChecker)
+}
 
+// ExtractFiles checks the entire source snapshot but returns mutation spans
+// and binding candidates from the entry source only. Imported call signatures
+// are resolved by the shared checker; dependency bodies are never spliced.
+func ExtractFiles(entry string, sources map[string]string) mutation.Result {
+	program, diagnostics := checked.New(entry, sources)
+	if len(diagnostics) != 0 {
+		return mutation.Result{Diagnostics: diagnostics}
+	}
+	typeChecker, done := program.Compiler.GetTypeChecker(context.Background())
+	defer done()
+	var source string
+	for name, contents := range sources {
+		if checked.Normalize(name) == checked.Normalize(entry) {
+			source = contents
+			break
+		}
+	}
+	return extractEntry(source, program.Entry, typeChecker)
+}
+
+func extractEntry(source string, file *ast.SourceFile, typeChecker *checker.Checker) mutation.Result {
 	b := builder{source: source, file: file, checker: typeChecker, ids: make(map[*ast.Symbol]uint32), bindings: make(map[*ast.Symbol]*mutation.Binding)}
 	b.visit(file.AsNode())
 	result := mutation.Result{Calls: b.calls, Literals: b.literals, Identifiers: b.identifiers}

@@ -123,6 +123,8 @@ type builder struct {
 	shapeBuilding map[*ast.Symbol]bool
 	returnType    *graph.Type
 	literalSlot   *graph.Type
+	moduleFiles   map[*ast.SourceFile]string
+	entryFile     *ast.SourceFile
 }
 
 type fenceError struct {
@@ -143,6 +145,11 @@ func (b *builder) statements(nodes []*ast.Node, topLevel bool) ([]*graph.Stateme
 
 func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, *fenceError) {
 	switch node.Kind {
+	case ast.KindImportDeclaration:
+		if b.moduleFiles != nil {
+			return nil, nil
+		}
+		return nil, b.fence(node)
 	case ast.KindInterfaceDeclaration, ast.KindTypeAliasDeclaration:
 		if !topLevel {
 			return nil, b.fence(node)
@@ -154,7 +161,7 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 
 	case ast.KindVariableStatement:
 		data := node.AsVariableStatement()
-		if data.Modifiers() != nil {
+		if !b.declarationModifiers(data.Modifiers()) {
 			return nil, b.fence(node)
 		}
 		return b.variableDeclarations(data.DeclarationList)
@@ -494,7 +501,7 @@ func (b *builder) functionDeclaration(node *ast.Node) (*graph.Statement, *fenceE
 	if hasModifier(data.Modifiers(), ast.KindAsyncKeyword) {
 		return nil, b.fenceDiagnostic(node, "AsyncFunction", "unsupported construct async function")
 	}
-	if nameNode == nil || nameNode.Kind != ast.KindIdentifier || data.Modifiers() != nil || data.AsteriskToken != nil || data.TypeParameters != nil || data.Body == nil || data.Body.Kind != ast.KindBlock {
+	if nameNode == nil || nameNode.Kind != ast.KindIdentifier || !b.declarationModifiers(data.Modifiers()) || data.AsteriskToken != nil || data.TypeParameters != nil || data.Body == nil || data.Body.Kind != ast.KindBlock {
 		return nil, b.fence(node)
 	}
 	if data.Type != nil {
@@ -1451,7 +1458,7 @@ func (b *builder) checkedType(node *ast.Node) (graph.Type, *fenceError) {
 }
 
 func (b *builder) expressionType(node *ast.Node) (graph.Type, bool, *fenceError) {
-	symbol := b.checker.GetSymbolAtLocation(node)
+	symbol := b.sourceSymbol(node)
 	if symbol == nil {
 		useType, fence := b.checkedType(node)
 		return useType, false, fence
@@ -1480,13 +1487,13 @@ func (b *builder) ensureShapeDeclaration(node *ast.Node) (graph.ShapeID, *fenceE
 	switch node.Kind {
 	case ast.KindInterfaceDeclaration:
 		declaration := node.AsInterfaceDeclaration()
-		if declaration.Modifiers() != nil || declaration.TypeParameters != nil || declaration.HeritageClauses != nil {
+		if !b.declarationModifiers(declaration.Modifiers()) || declaration.TypeParameters != nil || declaration.HeritageClauses != nil {
 			return 0, b.fence(node)
 		}
 		name = declaration.Name()
 	case ast.KindTypeAliasDeclaration:
 		declaration := node.AsTypeAliasDeclaration()
-		if declaration.Modifiers() != nil || declaration.TypeParameters != nil || declaration.Type == nil || declaration.Type.Kind != ast.KindTypeLiteral {
+		if !b.declarationModifiers(declaration.Modifiers()) || declaration.TypeParameters != nil || declaration.Type == nil || declaration.Type.Kind != ast.KindTypeLiteral {
 			return 0, b.fence(node)
 		}
 		name = declaration.Name()
@@ -1514,7 +1521,7 @@ func (b *builder) ensureNamedShape(symbol *ast.Symbol, useNode *ast.Node) (graph
 		return 0, b.fenceWithMessage(useNode, "named shape must resolve to one declaration")
 	}
 	declaration := symbol.Declarations[0]
-	if ast.GetSourceFileOfNode(declaration) != b.file || (declaration.Kind != ast.KindInterfaceDeclaration && declaration.Kind != ast.KindTypeAliasDeclaration) {
+	if !b.ownsFile(ast.GetSourceFileOfNode(declaration)) || (declaration.Kind != ast.KindInterfaceDeclaration && declaration.Kind != ast.KindTypeAliasDeclaration) {
 		return 0, b.fenceWithMessage(useNode, "unsupported anonymous shape")
 	}
 
@@ -1527,14 +1534,14 @@ func (b *builder) ensureNamedShape(symbol *ast.Symbol, useNode *ast.Node) (graph
 	switch declaration.Kind {
 	case ast.KindInterfaceDeclaration:
 		data := declaration.AsInterfaceDeclaration()
-		if data.Modifiers() != nil || data.TypeParameters != nil || data.HeritageClauses != nil {
+		if !b.declarationModifiers(data.Modifiers()) || data.TypeParameters != nil || data.HeritageClauses != nil {
 			return 0, b.fence(declaration)
 		}
 		name = data.Name()
 		members = data.Members.Nodes
 	case ast.KindTypeAliasDeclaration:
 		data := declaration.AsTypeAliasDeclaration()
-		if data.Modifiers() != nil || data.TypeParameters != nil || data.Type == nil || data.Type.Kind != ast.KindTypeLiteral {
+		if !b.declarationModifiers(data.Modifiers()) || data.TypeParameters != nil || data.Type == nil || data.Type.Kind != ast.KindTypeLiteral {
 			return 0, b.fence(declaration)
 		}
 		name = data.Name()
@@ -1781,7 +1788,7 @@ func (b *builder) typeFlowFence(node *ast.Node, target graph.Type, source graph.
 }
 
 func (b *builder) binding(node *ast.Node) (graph.BindingID, *fenceError) {
-	symbol := b.checker.GetSymbolAtLocation(node)
+	symbol := b.sourceSymbol(node)
 	if symbol == nil {
 		return 0, b.fenceWithMessage(node, "identifier has no checker symbol")
 	}
@@ -1795,9 +1802,14 @@ func (b *builder) binding(node *ast.Node) (graph.BindingID, *fenceError) {
 }
 
 func (b *builder) position(node *ast.Node) graph.Position {
-	pos := scanner.GetTokenPosOfNode(node, b.file, false)
-	line, column := scanner.GetECMALineAndUTF16CharacterOfPosition(b.file, pos)
-	return graph.Position{Line: line + 1, Column: int(column) + 1}
+	file := ast.GetSourceFileOfNode(node)
+	pos := scanner.GetTokenPosOfNode(node, file, false)
+	line, column := scanner.GetECMALineAndUTF16CharacterOfPosition(file, pos)
+	position := graph.Position{Line: line + 1, Column: int(column) + 1}
+	if b.moduleFiles != nil && file != b.entryFile {
+		position.SourcePath = b.moduleFiles[file]
+	}
+	return position
 }
 
 func (b *builder) fence(node *ast.Node) *fenceError {
@@ -1811,8 +1823,12 @@ func (b *builder) fenceWithMessage(node *ast.Node, message string) *fenceError {
 }
 
 func (b *builder) fenceDiagnostic(node *ast.Node, construct string, message string) *fenceError {
+	sourcePath := b.sourcePath
+	if b.moduleFiles != nil {
+		sourcePath = b.moduleFiles[ast.GetSourceFileOfNode(node)]
+	}
 	return &fenceError{diagnostic: graph.Diagnostic{
-		SourcePath: b.sourcePath,
+		SourcePath: sourcePath,
 		Position:   b.position(node),
 		Construct:  construct,
 		Message:    message,
@@ -1875,7 +1891,7 @@ func (b *builder) supportedCallbackArgument(node *ast.Node) bool {
 func (b *builder) supportedCallValue(node *ast.Node, seen map[*ast.Symbol]bool) bool {
 	switch node.Kind {
 	case ast.KindIdentifier:
-		return b.supportedSourceSymbol(b.checker.GetSymbolAtLocation(node), seen)
+		return b.supportedSourceSymbol(b.sourceSymbol(node), seen)
 	case ast.KindParenthesizedExpression:
 		return b.supportedCallValue(node.AsParenthesizedExpression().Expression, seen)
 	case ast.KindArrowFunction:
@@ -1893,7 +1909,7 @@ func (b *builder) supportedSourceSymbol(symbol *ast.Symbol, seen map[*ast.Symbol
 	}
 	seen[symbol] = true
 	for _, declaration := range symbol.Declarations {
-		if ast.GetSourceFileOfNode(declaration) != b.file {
+		if !b.ownsFile(ast.GetSourceFileOfNode(declaration)) {
 			continue
 		}
 		switch declaration.Kind {
