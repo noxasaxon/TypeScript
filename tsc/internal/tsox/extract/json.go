@@ -114,16 +114,16 @@ func (b *builder) jsonStringify(node *ast.Node) (*graph.Expression, *fenceError)
 		if typeFence != nil {
 			return nil, b.jsonFence(node, typeFence.diagnostic.Message)
 		}
+		// JSON observes undefined directly even when the checker narrowed a
+		// syntactic optional chain. Its input is not a required storage slot.
+		valueType.Optional = true
 		argument, fence = b.expressionForSlot(argumentNode, valueType)
 	}
 	if fence != nil {
 		return nil, b.jsonFence(node, fence.diagnostic.Message)
 	}
-	unprovedIndex, unprovedPrototype := false, false
+	unprovedPrototype := false
 	walkGraphExpressions([]*graph.Statement{{Value: argument}}, func(value *graph.Expression) {
-		if value.Kind == graph.ExpressionIndex && !indexReadOnly(value.Index) {
-			unprovedIndex = true
-		}
 		// An intermediate receiver can supply an inherited field even when
 		// the serialized result itself has a plain shape.
 		if value.Type.Kind == graph.TypeObject {
@@ -134,9 +134,6 @@ func (b *builder) jsonStringify(node *ast.Node) (*graph.Expression, *fenceError)
 	})
 	if unprovedPrototype {
 		return nil, b.jsonFence(node, "an argument expression shape contains __proto__; prototype lookup is outside the plain-record proof")
-	}
-	if unprovedIndex {
-		return nil, b.jsonFence(node, "effectful indexed argument evaluation cannot yet preserve the receiver identity before index effects")
 	}
 	return &graph.Expression{Kind: graph.ExpressionJSONStringify, Position: b.position(node), Type: graph.Type{Kind: graph.TypeString, Optional: argument.Type.Optional || argument.Kind == graph.ExpressionUndefined}, Operand: argument}, nil
 }

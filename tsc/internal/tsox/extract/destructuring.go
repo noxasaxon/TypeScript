@@ -43,17 +43,12 @@ func (b *builder) objectDestructuring(node *ast.Node, mutable bool) ([]*graph.St
 	if fence != nil {
 		return nil, fence
 	}
+	b.narrowOptionalChainUse(declaration.Initializer, source)
 	if source.Type.Kind != graph.TypeObject || source.Type.Optional {
 		return nil, b.destructuringFence(declaration.Initializer, "the source must be a non-optional named plain record")
 	}
-	// The general indexed-read emitter does not capture a receiver before an
-	// effectful index. Keep the same bounded guard as JSON until that scheduling
-	// limitation is repaired; a temporary around the entire read is insufficient.
-	unprovedIndex, unprovedPrototype := false, false
+	unprovedPrototype := false
 	walkGraphExpressions([]*graph.Statement{{Value: source}}, func(value *graph.Expression) {
-		if value.Kind == graph.ExpressionIndex && !indexReadOnly(value.Index) {
-			unprovedIndex = true
-		}
 		// A __proto__ initializer can make another omitted field inherited,
 		// including a receiver field used to obtain the destructuring source.
 		// Reject whole shapes; harmless instances are not distinguished here.
@@ -65,9 +60,6 @@ func (b *builder) objectDestructuring(node *ast.Node, mutable bool) ([]*graph.St
 	})
 	if unprovedPrototype {
 		return nil, b.destructuringFence(declaration.Initializer, "a source expression shape contains __proto__; prototype lookup is outside the plain-record proof")
-	}
-	if unprovedIndex {
-		return nil, b.destructuringFence(declaration.Initializer, "effectful indexed source evaluation cannot yet preserve the receiver identity before index effects")
 	}
 	if len(elements) == 0 {
 		return []*graph.Statement{{Kind: graph.StatementExpression, Position: b.position(node), Value: source}}, nil

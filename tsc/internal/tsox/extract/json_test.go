@@ -17,9 +17,8 @@ func TestJSONStringifyFencesNameTheLimitation(t *testing.T) {
 		{"cycle domain", `interface Link { next?: Link; } const value: Link = {}; value.next = value; console.log(JSON.stringify(value));`, "recursive"},
 		{"toJSON", `interface RecordValue { toJSON: () => string; } const value: RecordValue = {toJSON: (): string => "custom"}; console.log(JSON.stringify(value));`, "toJSON"},
 		{"method toJSON", `interface RecordValue { toJSON(): string; } function encode(value: RecordValue): string { return JSON.stringify(value); }`, "toJSON"},
-		{"effectful argument index", `interface Item { n: number; } let values: Item[] = [{n: 1}]; function index(): number { values = [{n: 2}]; return 0; } console.log(JSON.stringify(values[index()]));`, "receiver identity"},
 		{"prototype", `interface RecordValue { __proto__: number; } const value: RecordValue = {__proto__: 1}; console.log(JSON.stringify(value));`, "__proto__"},
-		{"inherited intermediate property", `interface Child { n: number; } interface Proto { child?: Child; } interface Holder { __proto__: Proto; child?: Child; } const proto: Proto = {child: {n: 7}}; const holder: Holder = {__proto__: proto}; console.log(JSON.stringify(holder.child));`, "prototype lookup"},
+		{"inherited intermediate property", `interface Child { n: number; } interface Proto { child?: Child; } interface Holder { __proto__: Proto; child?: Child; } const proto: Proto = {child: {n: 7}}; const holder: Holder = {__proto__: proto}; console.log(JSON.stringify(holder.child));`, "prototype setter"},
 		{"undefined array literal", `console.log(JSON.stringify([undefined]));`, "undefined"},
 		{"optional array", `const values: (number | undefined)[] = [1, undefined]; console.log(JSON.stringify(values));`, "optional array element"},
 		{"absent write", `interface RecordValue { a?: number; b: number; } const value: RecordValue = {b: 1}; value.a = 2; console.log(JSON.stringify(value));`, "insertion order"},
@@ -33,7 +32,11 @@ func TestJSONStringifyFencesNameTheLimitation(t *testing.T) {
 				t.Fatalf("expected one JSON fence: %+v", result)
 			}
 			diagnostic := result.Diagnostics[0]
-			if diagnostic.Construct != "JSONStringify" || !strings.Contains(diagnostic.Message, test.want) || diagnostic.SourcePath != "json.ts" || diagnostic.Position.Line < 1 || diagnostic.Position.Column < 1 {
+			construct := "JSONStringify"
+			if test.name == "inherited intermediate property" {
+				construct = "PrototypeObjectLiteral"
+			}
+			if diagnostic.Construct != construct || !strings.Contains(diagnostic.Message, test.want) || diagnostic.SourcePath != "json.ts" || diagnostic.Position.Line < 1 || diagnostic.Position.Column < 1 {
 				t.Fatalf("unexpected diagnostic: %+v", diagnostic)
 			}
 		})

@@ -456,6 +456,7 @@ func (b *builder) variableDeclarations(node *ast.Node) ([]*graph.Statement, *fen
 			value, fence = b.expression(declaration.Initializer)
 			if fence == nil {
 				valueType, fence = b.checkedType(nameNode)
+				b.narrowOptionalChainForSlot(declaration.Initializer, valueType, value)
 			}
 		}
 		if fence != nil {
@@ -673,6 +674,9 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		}, nil
 
 	case ast.KindObjectLiteralExpression:
+		if fence := b.objectLiteralPrototypeFence(node); fence != nil {
+			return nil, fence
+		}
 		contextualType := b.checker.GetContextualType(node, checker.ContextFlagsNone)
 		if b.literalSlot != nil && b.literalSlot.Kind == graph.TypeObject {
 			valueType := *b.literalSlot
@@ -735,6 +739,10 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		if fence != nil {
 			return nil, fence
 		}
+		restoreOptionalChainReceiver(receiver, data.QuestionDotToken != nil)
+		if !chain {
+			b.narrowOptionalChainUse(data.Expression, receiver)
+		}
 		if receiver.Type.Kind == graph.TypeArray {
 			if name.Text() != "length" {
 				return nil, b.fenceWithMessage(name, "unsupported array method or property "+name.Text())
@@ -773,10 +781,15 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		if fence != nil {
 			return nil, fence
 		}
+		restoreOptionalChainReceiver(receiver, data.QuestionDotToken != nil)
+		chain := node.Flags&ast.NodeFlagsOptionalChain != 0
+		if !chain {
+			b.narrowOptionalChainUse(data.Expression, receiver)
+		}
 		if receiver.Type.Kind != graph.TypeArray || receiver.Type.Element == nil {
 			return nil, b.fenceWithMessage(node, "element access requires an array")
 		}
-		index, fence := b.expression(data.ArgumentExpression)
+		index, fence := b.expressionForSlot(data.ArgumentExpression, graph.Type{Kind: graph.TypeNumber})
 		if fence != nil {
 			return nil, fence
 		}
@@ -784,7 +797,6 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			return nil, b.fenceWithMessage(data.ArgumentExpression, "array index must be a number")
 		}
 		valueType := *receiver.Type.Element
-		chain := node.Flags&ast.NodeFlagsOptionalChain != 0
 		if chain && receiver.Type.Optional {
 			valueType.Optional = true
 		}
@@ -806,6 +818,7 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		if fence != nil {
 			return nil, fence
 		}
+		b.narrowOptionalChainUse(data.Operand, operand)
 		valueType, fence := b.checkedType(node)
 		if fence != nil {
 			return nil, fence
@@ -890,6 +903,9 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			return nil, b.fenceWithMessage(node, "call argument count does not match supported signature")
 		}
 		for index := range arguments {
+			if index < len(data.Arguments.Nodes) {
+				b.narrowOptionalChainForSlot(data.Arguments.Nodes[index], callee.Type.Parameters[index], arguments[index])
+			}
 			if !slotAccepts(callee.Type.Parameters[index], arguments[index]) {
 				return nil, b.typeFlowFence(data.Arguments.Nodes[index], callee.Type.Parameters[index], arguments[index].Type)
 			}
@@ -954,7 +970,28 @@ func (b *builder) expressionForSlot(node *ast.Node, slot graph.Type) (*graph.Exp
 	b.literalSlot = &slot
 	value, fence := b.expression(node)
 	b.literalSlot = previous
+	if fence == nil {
+		b.narrowOptionalChainForSlot(node, slot, value)
+	}
 	return value, fence
+}
+
+func (b *builder) objectLiteralPrototypeFence(node *ast.Node) *fenceError {
+	for _, propertyNode := range node.AsObjectLiteralExpression().Properties.Nodes {
+		// Only the colon form with a non-computed __proto__ name is a
+		// prototype setter. Shorthand, computed names and methods are ordinary
+		// own properties, and retain their existing extraction rules.
+		if propertyNode.Kind != ast.KindPropertyAssignment {
+			continue
+		}
+		name := propertyNode.AsPropertyAssignment().Name()
+		if name != nil && (name.Kind == ast.KindIdentifier || name.Kind == ast.KindStringLiteral) && name.Text() == "__proto__" {
+			// Objects and null change the prototype; primitive initializers are
+			// ignored. Neither case creates the own field our graph represents.
+			return b.fenceDiagnostic(propertyNode, "PrototypeObjectLiteral", "unsupported object literal __proto__ prototype setter: object/null initializers change the prototype and primitive initializers create no own property")
+		}
+	}
+	return nil
 }
 
 func (b *builder) objectLiteral(node *ast.Node, valueType graph.Type) (*graph.Expression, *fenceError) {
@@ -1065,6 +1102,10 @@ func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceErro
 	if fence != nil {
 		return nil, fence
 	}
+	restoreOptionalChainReceiver(receiver, access.QuestionDotToken != nil)
+	if node.Flags&ast.NodeFlagsOptionalChain == 0 {
+		b.narrowOptionalChainUse(access.Expression, receiver)
+	}
 	if receiver.Type.Kind != graph.TypeArray || receiver.Type.Element == nil {
 		return nil, b.fence(accessNode)
 	}
@@ -1154,6 +1195,7 @@ func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceErro
 		} else if method != "slice" && index == 0 {
 			want = *receiver.Type.Element
 		}
+		b.narrowOptionalChainForSlot(argumentNode, want, argument)
 		if !sameType(want, argument.Type) {
 			return nil, b.typeFlowFence(argumentNode, want, argument.Type)
 		}
@@ -1312,6 +1354,10 @@ func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceErr
 	right, fence := b.expression(data.Right)
 	if fence != nil {
 		return nil, fence
+	}
+	if operator != "===" && operator != "!==" {
+		b.narrowOptionalChainUse(data.Left, left)
+		b.narrowOptionalChainUse(data.Right, right)
 	}
 	if (operator == "&&" || operator == "||") && (left.Type.Optional || right.Type.Optional) {
 		operand := data.Left
@@ -1483,6 +1529,7 @@ func (b *builder) booleanExpression(node *ast.Node) (*graph.Expression, *fenceEr
 	if fence != nil {
 		return nil, fence
 	}
+	b.narrowOptionalChainForSlot(node, graph.Type{Kind: graph.TypeBoolean}, expression)
 	if expression.Type.Kind != graph.TypeBoolean || expression.Type.Optional {
 		return nil, b.fenceDiagnostic(node, "NonBooleanCondition", "unsupported non-boolean condition")
 	}

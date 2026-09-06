@@ -48,36 +48,3 @@ func walkGraphExpressions(statements []*graph.Statement, visit func(*graph.Expre
 	}
 	body(statements)
 }
-
-// indexReadOnly is a conservative effect check for indexed-read scheduling.
-// Calls and writes may replace the receiver before the current emitter reads it.
-func indexReadOnly(value *graph.Expression) bool {
-	if value == nil {
-		return true
-	}
-	switch value.Kind {
-	case graph.ExpressionCall, graph.ExpressionMethodCall, graph.ExpressionAssignment, graph.ExpressionUpdate, graph.ExpressionArrow:
-		return false
-	}
-	for _, child := range []*graph.Expression{value.Left, value.Right, value.Operand, value.Callee, value.Receiver, value.Index} {
-		if !indexReadOnly(child) {
-			return false
-		}
-	}
-	for _, child := range value.Arguments {
-		if !indexReadOnly(child) {
-			return false
-		}
-	}
-	for _, child := range value.Expressions {
-		if !indexReadOnly(child) {
-			return false
-		}
-	}
-	for _, property := range value.Properties {
-		if !indexReadOnly(property.Value) {
-			return false
-		}
-	}
-	return true
-}

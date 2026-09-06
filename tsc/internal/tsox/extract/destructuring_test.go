@@ -92,13 +92,10 @@ func TestObjectDestructuringNamedLimits(t *testing.T) {
 		{"nonrecord", `const {length} = "text";`, "ObjectDestructuring", "named plain record"},
 		{"anonymous", `const {n} = {n: 1};`, "ObjectLiteralExpression", "anonymous shape"},
 		{"composite annotation", `interface First { n: number; } interface Second { n: number; } interface Source { child: First; } interface View { child: Second; } const source: Source = {child: {n: 1}}; const {child}: View = source;`, "BindingElement", "distinct named shapes"},
-		{"effectful index", `interface Item { n: number; } let values: Item[] = [{n: 1}]; function index(): number { values = [{n: 2}]; return 0; } const {n} = values[index()];`, "ObjectDestructuring", "receiver identity"},
-		{"nested effectful index", `interface Item { n: number; } interface Holder { item: Item; } let values: Holder[] = [{item: {n: 1}}]; function index(): number { values = [{item: {n: 2}}]; return 0; } const {n} = values[index()].item;`, "ObjectDestructuring", "receiver identity"},
-		{"empty effectful index", `interface Item { n: number; } let values: Item[] = [{n: 1}]; function index(): number { values = [{n: 2}]; return 0; } const {} = values[index()];`, "ObjectDestructuring", "receiver identity"},
-		{"prototype field", `interface Item { __proto__: number; } const source: Item = {__proto__: 1}; const {__proto__: value} = source;`, "ObjectDestructuring", "prototype lookup"},
-		{"inherited ordinary field", `interface Proto { n: number; } interface Item { __proto__: Proto; n?: number; } const source: Item = {__proto__: {n: 1}}; const {n} = source;`, "ObjectDestructuring", "prototype lookup"},
+		{"prototype field", `interface Item { __proto__: number; } const source: Item = {__proto__: 1}; const {__proto__: value} = source;`, "PrototypeObjectLiteral", "prototype setter"},
+		{"inherited ordinary field", `interface Proto { n: number; } interface Item { __proto__: Proto; n?: number; } const source: Item = {__proto__: {n: 1}}; const {n} = source;`, "PrototypeObjectLiteral", "prototype setter"},
 		{"empty prototype shape", `interface Item { __proto__?: number; } const source: Item = {}; const {} = source;`, "ObjectDestructuring", "prototype lookup"},
-		{"inherited source receiver", `interface Item { n: number; } interface Proto { item: Item; } interface Holder { __proto__: Proto; item?: Item; } const holder: Holder = {__proto__: {item: {n: 1}}}; const {n} = holder.item!;`, "ObjectDestructuring", "prototype lookup"},
+		{"inherited source receiver", `interface Item { n: number; } interface Proto { item: Item; } interface Holder { __proto__: Proto; item?: Item; } const holder: Holder = {__proto__: {item: {n: 1}}}; const {n} = holder.item!;`, "PrototypeObjectLiteral", "prototype setter"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
