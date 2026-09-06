@@ -74,3 +74,17 @@ type Result struct {
 	Identifiers []string
 	Diagnostics []graph.Diagnostic
 }
+
+// SourceSites groups coordinates and binding identities within one source
+// file. Spans and binding IDs are local to SourcePath, never to another module.
+type SourceSites struct {
+	SourcePath string
+	Sites      Result
+}
+
+// ModulesResult contains all checked source files, ordered by source path, or
+// diagnostics with no partial sites. Type-only dependencies are included.
+type ModulesResult struct {
+	Files       []SourceSites
+	Diagnostics []graph.Diagnostic
+}

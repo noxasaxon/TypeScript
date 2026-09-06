@@ -21,13 +21,73 @@ func ExtractFiles(entry string, sources map[string]string) graph.Result {
 	var statements []*graph.Statement
 	for _, file := range program.RuntimeFiles {
 		b.file = file
+		if fence := b.checkJSONCalls(file.AsNode()); fence != nil {
+			return diagnosticResult(fence.diagnostic)
+		}
+	}
+	for _, file := range program.RuntimeFiles {
+		b.file = file
 		body, fence := b.statements(file.Statements.Nodes, true)
 		if fence != nil {
 			return diagnosticResult(fence.diagnostic)
 		}
 		statements = append(statements, body...)
 	}
-	return graph.Result{Program: &graph.Program{SourcePath: entry, Shapes: b.shapes, Statements: statements}}
+	return b.finishJSON(&graph.Program{SourcePath: entry, Shapes: b.shapes, Statements: statements, EntryExports: b.entryExports()})
+}
+
+// entryExports runs after extraction so every supported runtime declaration
+// already has its original binding. Type exports never become host aliases.
+func (b *builder) entryExports() []graph.Export {
+	var exports []graph.Export
+	add := func(name *ast.Node, symbol *ast.Symbol) {
+		if symbol != nil && symbol.Flags&ast.SymbolFlagsAlias != 0 {
+			symbol = b.checker.GetAliasedSymbol(symbol)
+		}
+		if binding, ok := b.bindings[symbol]; ok {
+			exports = append(exports, graph.Export{Name: name.Text(), Binding: binding, Position: b.position(name)})
+		}
+	}
+	var declarationName func(*ast.Node)
+	declarationName = func(name *ast.Node) {
+		if name.Kind == ast.KindIdentifier {
+			add(name, b.sourceSymbol(name))
+			return
+		}
+		if name.Kind == ast.KindObjectBindingPattern {
+			for _, element := range name.AsBindingPattern().Elements.Nodes {
+				declarationName(element.Name())
+			}
+		}
+	}
+	for _, statement := range b.entryFile.Statements.Nodes {
+		if statement.Kind == ast.KindExportDeclaration {
+			declaration := statement.AsExportDeclaration()
+			if declaration.IsTypeOnly {
+				continue
+			}
+			for _, node := range declaration.ExportClause.AsNamedExports().Elements.Nodes {
+				specifier := node.AsExportSpecifier()
+				if !specifier.IsTypeOnly {
+					add(specifier.Name(), b.checker.GetExportSpecifierLocalTargetSymbol(node))
+				}
+			}
+			continue
+		}
+		modifiers := statement.Modifiers()
+		if modifiers == nil || len(modifiers.Nodes) != 1 || modifiers.Nodes[0].Kind != ast.KindExportKeyword {
+			continue
+		}
+		switch statement.Kind {
+		case ast.KindFunctionDeclaration:
+			declarationName(statement.Name())
+		case ast.KindVariableStatement:
+			for _, declaration := range statement.AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes {
+				declarationName(declaration.Name())
+			}
+		}
+	}
+	return exports
 }
 
 func (b *builder) sourceSymbol(node *ast.Node) *ast.Symbol {

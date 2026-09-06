@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/bundled"
@@ -82,15 +83,18 @@ func Extract(sourcePath string, source string) graph.Result {
 		shapeIDs:      make(map[*ast.Symbol]graph.ShapeID),
 		shapeBuilding: make(map[*ast.Symbol]bool),
 	}
+	if fence := b.checkJSONCalls(file.AsNode()); fence != nil {
+		return diagnosticResult(fence.diagnostic)
+	}
 	statements, fence := b.statements(file.Statements.Nodes, true)
 	if fence != nil {
 		return diagnosticResult(fence.diagnostic)
 	}
-	return graph.Result{Program: &graph.Program{
+	return b.finishJSON(&graph.Program{
 		SourcePath: sourcePath,
 		Shapes:     b.shapes,
 		Statements: statements,
-	}}
+	})
 }
 
 func diagnosticResult(diagnostic graph.Diagnostic) graph.Result {
@@ -145,7 +149,7 @@ func (b *builder) statements(nodes []*ast.Node, topLevel bool) ([]*graph.Stateme
 
 func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, *fenceError) {
 	switch node.Kind {
-	case ast.KindImportDeclaration:
+	case ast.KindImportDeclaration, ast.KindExportDeclaration:
 		if b.moduleFiles != nil {
 			return nil, nil
 		}
@@ -415,6 +419,14 @@ func (b *builder) variableDeclarations(node *ast.Node) ([]*graph.Statement, *fen
 	for _, declarationNode := range data.Declarations.Nodes {
 		declaration := declarationNode.AsVariableDeclaration()
 		nameNode := declaration.Name()
+		if nameNode != nil && nameNode.Kind == ast.KindObjectBindingPattern {
+			statements, fence := b.objectDestructuring(declarationNode, flags == ast.NodeFlagsLet)
+			if fence != nil {
+				return nil, fence
+			}
+			result = append(result, statements...)
+			continue
+		}
 		if nameNode == nil || nameNode.Kind != ast.KindIdentifier || declaration.Initializer == nil || declaration.ExclamationToken != nil {
 			return nil, b.fence(declarationNode)
 		}
@@ -612,6 +624,9 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		}, nil
 
 	case ast.KindStringLiteral, ast.KindNoSubstitutionTemplateLiteral:
+		if !utf8.ValidString(node.Text()) {
+			return nil, b.fenceDiagnostic(node, "StringRepresentation", "unsupported string literal: lone UTF-16 surrogate cannot be represented by Rust UTF-8 strings, including JSON.stringify")
+		}
 		return &graph.Expression{
 			Kind:     graph.ExpressionString,
 			Position: b.position(node),
@@ -634,6 +649,9 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		}, nil
 
 	case ast.KindIdentifier:
+		if number, ok := b.builtinNumber(node); ok {
+			return &graph.Expression{Kind: graph.ExpressionNumber, Position: b.position(node), Type: graph.Type{Kind: graph.TypeNumber}, Number: number}, nil
+		}
 		if node.Text() == "undefined" && b.checker.GetTypeAtLocation(node).Flags()&checker.TypeFlagsUndefined != 0 {
 			return &graph.Expression{Kind: graph.ExpressionUndefined, Position: b.position(node)}, nil
 		}
@@ -811,6 +829,9 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		return b.updateExpression(node, data.Operand, data.Operator, false)
 
 	case ast.KindCallExpression:
+		if b.isJSONStringify(node) {
+			return b.jsonStringify(node)
+		}
 		if _, ok := b.consoleLogCall(node); ok {
 			return nil, b.fence(node)
 		}
@@ -888,10 +909,16 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 
 	case ast.KindTemplateExpression:
 		data := node.AsTemplateExpression()
+		if !utf8.ValidString(data.Head.Text()) {
+			return nil, b.fenceDiagnostic(node, "StringRepresentation", "unsupported template literal: lone UTF-16 surrogate cannot be represented by Rust UTF-8 strings, including JSON.stringify")
+		}
 		chunks := []string{data.Head.Text()}
 		expressions := make([]*graph.Expression, 0, len(data.TemplateSpans.Nodes))
 		for _, spanNode := range data.TemplateSpans.Nodes {
 			span := spanNode.AsTemplateSpan()
+			if !utf8.ValidString(span.Literal.Text()) {
+				return nil, b.fenceDiagnostic(spanNode, "StringRepresentation", "unsupported template literal: lone UTF-16 surrogate cannot be represented by Rust UTF-8 strings, including JSON.stringify")
+			}
 			expression, fence := b.expression(span.Expression)
 			if fence != nil {
 				return nil, fence
@@ -946,7 +973,7 @@ func (b *builder) objectLiteral(node *ast.Node, valueType graph.Type) (*graph.Ex
 			if !field.Type.Optional {
 				return nil, b.fenceWithMessage(node, "object literal fields must match named declaration order")
 			}
-			values = append(values, graph.PropertyValue{Position: b.position(node), Name: field.Name, Value: &graph.Expression{Kind: graph.ExpressionUndefined, Position: b.position(node), Type: field.Type}})
+			values = append(values, graph.PropertyValue{Position: b.position(node), Name: field.Name, Omitted: true, Value: &graph.Expression{Kind: graph.ExpressionUndefined, Position: b.position(node), Type: field.Type}})
 			continue
 		}
 		propertyNode := properties[propertyIndex]
@@ -962,7 +989,7 @@ func (b *builder) objectLiteral(node *ast.Node, valueType graph.Type) (*graph.Ex
 			if !field.Type.Optional {
 				return nil, b.fenceWithMessage(propertyNode, "object literal fields must match named declaration order")
 			}
-			values = append(values, graph.PropertyValue{Position: b.position(node), Name: field.Name, Value: &graph.Expression{Kind: graph.ExpressionUndefined, Position: b.position(node), Type: field.Type}})
+			values = append(values, graph.PropertyValue{Position: b.position(node), Name: field.Name, Omitted: true, Value: &graph.Expression{Kind: graph.ExpressionUndefined, Position: b.position(node), Type: field.Type}})
 			continue
 		}
 		value, fence := b.expressionForSlot(property.Initializer, shape.Fields[index].Type)
@@ -1118,6 +1145,9 @@ func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceErro
 		if fence := b.functionValueFence(argumentNode, argument); fence != nil {
 			return nil, fence
 		}
+		if argument.Type.Kind == graph.TypeFunction {
+			return nil, b.fenceDiagnostic(argumentNode, "FunctionValue", "unsupported construct FunctionValue: non-callback array method uses a function value")
+		}
 		want := graph.Type{Kind: graph.TypeNumber}
 		if method == "reduce" {
 			want = valueType
@@ -1198,6 +1228,9 @@ func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceErr
 		return &graph.Expression{Kind: graph.ExpressionNullish, Position: b.position(node), Type: valueType, Left: left, Right: right}, nil
 	}
 	if operator, ok := assignmentOperator(operatorKind); ok {
+		if _, immutable := b.builtinNumber(data.Left); immutable {
+			return nil, b.fenceDiagnostic(data.Left, "ReadonlyBuiltin", "unsupported assignment to immutable global "+data.Left.Text())
+		}
 		if data.Left.Kind != ast.KindIdentifier && data.Left.Kind != ast.KindPropertyAccessExpression && data.Left.Kind != ast.KindElementAccessExpression {
 			return nil, b.fence(data.Left)
 		}
@@ -1379,6 +1412,9 @@ func (b *builder) shapeField(id graph.ShapeID, name string) (graph.Field, bool) 
 
 func (b *builder) updateExpression(node *ast.Node, operandNode *ast.Node, operatorKind ast.Kind, prefix bool) (*graph.Expression, *fenceError) {
 	operator, ok := updateOperator(operatorKind)
+	if _, immutable := b.builtinNumber(operandNode); immutable {
+		return nil, b.fenceDiagnostic(operandNode, "ReadonlyBuiltin", "unsupported update of immutable global "+operandNode.Text())
+	}
 	if !ok || operandNode.Kind != ast.KindIdentifier {
 		return nil, b.fence(node)
 	}

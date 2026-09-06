@@ -10,6 +10,16 @@ type Program struct {
 	SourcePath string
 	Shapes     []Shape
 	Statements []*Statement
+	// EntryExports maps runtime names exposed by the entry module to their
+	// original lexical bindings. Re-exports introduce no alias storage.
+	EntryExports []Export
+}
+
+// Export associates an entry-module runtime export with its original binding.
+type Export struct {
+	Name     string
+	Binding  BindingID
+	Position Position
 }
 
 // BindingID preserves checker-resolved lexical identity without retaining a
@@ -127,25 +137,26 @@ type Statement struct {
 type ExpressionKind string
 
 const (
-	ExpressionNumber      ExpressionKind = "number"
-	ExpressionString      ExpressionKind = "string"
-	ExpressionBoolean     ExpressionKind = "boolean"
-	ExpressionUndefined   ExpressionKind = "undefined"
-	ExpressionIdentifier  ExpressionKind = "identifier"
-	ExpressionBinary      ExpressionKind = "binary"
-	ExpressionNullish     ExpressionKind = "nullish"
-	ExpressionUnary       ExpressionKind = "unary"
-	ExpressionAssignment  ExpressionKind = "assignment"
-	ExpressionUpdate      ExpressionKind = "update"
-	ExpressionCall        ExpressionKind = "call"
-	ExpressionMethodCall  ExpressionKind = "method-call"
-	ExpressionTemplate    ExpressionKind = "template"
-	ExpressionArrow       ExpressionKind = "arrow"
-	ExpressionObject      ExpressionKind = "object"
-	ExpressionProperty    ExpressionKind = "property"
-	ExpressionArray       ExpressionKind = "array"
-	ExpressionIndex       ExpressionKind = "index"
-	ExpressionArrayLength ExpressionKind = "array-length"
+	ExpressionNumber        ExpressionKind = "number"
+	ExpressionString        ExpressionKind = "string"
+	ExpressionBoolean       ExpressionKind = "boolean"
+	ExpressionUndefined     ExpressionKind = "undefined"
+	ExpressionIdentifier    ExpressionKind = "identifier"
+	ExpressionBinary        ExpressionKind = "binary"
+	ExpressionNullish       ExpressionKind = "nullish"
+	ExpressionUnary         ExpressionKind = "unary"
+	ExpressionAssignment    ExpressionKind = "assignment"
+	ExpressionUpdate        ExpressionKind = "update"
+	ExpressionCall          ExpressionKind = "call"
+	ExpressionMethodCall    ExpressionKind = "method-call"
+	ExpressionTemplate      ExpressionKind = "template"
+	ExpressionArrow         ExpressionKind = "arrow"
+	ExpressionObject        ExpressionKind = "object"
+	ExpressionProperty      ExpressionKind = "property"
+	ExpressionArray         ExpressionKind = "array"
+	ExpressionIndex         ExpressionKind = "index"
+	ExpressionArrayLength   ExpressionKind = "array-length"
+	ExpressionJSONStringify ExpressionKind = "json-stringify"
 )
 
 // PropertyValue is one declaration-named object-literal field value.
@@ -153,6 +164,10 @@ type PropertyValue struct {
 	Position Position
 	Name     string
 	Value    *Expression
+	// Omitted distinguishes an absent optional property from a present property
+	// whose initial value is undefined. JSON property insertion order needs this
+	// provenance even though ordinary field reads use the same Option storage.
+	Omitted bool
 }
 
 // Expression stores only fields used by its Kind. Chunks has exactly one more

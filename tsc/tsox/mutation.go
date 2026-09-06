@@ -12,7 +12,13 @@ func MutationSites(sourcePath string, source string) mutation.Result {
 }
 
 // MutationSitesFiles checks all modules but reports only entry-source spans.
-// Dependencies are immutable context for this slice's mutation operators.
+// Use MutationSitesModules to enumerate dependency-source spans as well.
 func MutationSitesFiles(entry string, sources map[string]string) mutation.Result {
 	return mutationsites.ExtractFiles(entry, sources)
+}
+
+// MutationSitesModules checks the complete immutable source snapshot and
+// reports file-local sites for every reachable source in stable path order.
+func MutationSitesModules(entry string, sources map[string]string) mutation.ModulesResult {
+	return mutationsites.ExtractModules(entry, sources)
 }

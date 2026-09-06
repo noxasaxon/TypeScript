@@ -5,6 +5,7 @@ package mutationsites
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/microsoft/typescript-go/internal/ast"
@@ -71,6 +72,30 @@ func ExtractFiles(entry string, sources map[string]string) mutation.Result {
 		}
 	}
 	return extractEntry(source, program.Entry, typeChecker)
+}
+
+// ExtractModules keeps each file's spans and binding IDs in a separate result,
+// while the shared checker resolves imported signatures and type identities.
+func ExtractModules(entry string, sources map[string]string) mutation.ModulesResult {
+	program, diagnostics := checked.New(entry, sources)
+	if len(diagnostics) != 0 {
+		return mutation.ModulesResult{Diagnostics: diagnostics}
+	}
+	typeChecker, done := program.Compiler.GetTypeChecker(context.Background())
+	defer done()
+	files := make([]*ast.SourceFile, 0, len(program.Files))
+	for file := range program.Files {
+		files = append(files, file)
+	}
+	sort.Slice(files, func(left, right int) bool { return program.Files[files[left]] < program.Files[files[right]] })
+	result := mutation.ModulesResult{}
+	for _, file := range files {
+		result.Files = append(result.Files, mutation.SourceSites{
+			SourcePath: program.Files[file],
+			Sites:      extractEntry(file.Text(), file, typeChecker),
+		})
+	}
+	return result
 }
 
 func extractEntry(source string, file *ast.SourceFile, typeChecker *checker.Checker) mutation.Result {

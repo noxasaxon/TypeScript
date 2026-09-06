@@ -210,9 +210,9 @@ func moduleImports(file *ast.SourceFile, sourcePath string) ([]dependency, *grap
 			if data.Modifiers() != nil || data.Attributes != nil || data.ModuleSpecifier == nil || data.ModuleSpecifier.Kind != ast.KindStringLiteral {
 				return nil, diagnostic(file, sourcePath, statement, "ModuleImport", "unsupported import declaration or attributes")
 			}
-			name := data.ModuleSpecifier.Text()
-			if !(strings.HasPrefix(name, "./") || strings.HasPrefix(name, "../")) || !strings.HasSuffix(name, ".ts") || strings.HasSuffix(name, ".d.ts") || strings.ContainsAny(name, "\\?#%") {
-				return nil, diagnostic(file, sourcePath, data.ModuleSpecifier, "ModuleSpecifier", "unsupported module specifier: expected explicit relative .ts source")
+			name, d := moduleSpecifier(file, sourcePath, data.ModuleSpecifier)
+			if d != nil {
+				return nil, d
 			}
 			typeOnly := false
 			if data.ImportClause != nil {
@@ -229,8 +229,28 @@ func moduleImports(file *ast.SourceFile, sourcePath string) ([]dependency, *grap
 				}
 			}
 			imports = append(imports, dependency{name: name, node: statement, typeOnly: typeOnly})
-		case ast.KindExportDeclaration, ast.KindExportAssignment:
-			return nil, diagnostic(file, sourcePath, statement, "ModuleExport", "unsupported export: only direct named declarations are supported")
+		case ast.KindExportDeclaration:
+			data := statement.AsExportDeclaration()
+			if data.Modifiers() != nil || data.Attributes != nil || data.ExportClause == nil || data.ExportClause.Kind != ast.KindNamedExports {
+				return nil, diagnostic(file, sourcePath, statement, "ModuleExport", "unsupported export: expected a named export list without attributes")
+			}
+			for _, specifier := range data.ExportClause.AsNamedExports().Elements.Nodes {
+				item := specifier.AsExportSpecifier()
+				if item.Name().Kind != ast.KindIdentifier || item.Name().Text() == "default" || (item.PropertyName != nil && (item.PropertyName.Kind != ast.KindIdentifier || item.PropertyName.Text() == "default")) {
+					return nil, diagnostic(file, sourcePath, specifier, "ModuleExport", "unsupported export specifier: expected non-default identifier names")
+				}
+			}
+			if data.ModuleSpecifier != nil {
+				name, d := moduleSpecifier(file, sourcePath, data.ModuleSpecifier)
+				if d != nil {
+					return nil, d
+				}
+				// Node retains loading for inline-only type lists and empty lists.
+				// Only declaration-level export type erases the runtime edge.
+				imports = append(imports, dependency{name: name, node: statement, typeOnly: data.IsTypeOnly})
+			}
+		case ast.KindExportAssignment:
+			return nil, diagnostic(file, sourcePath, statement, "ModuleExport", "unsupported default export or export assignment")
 		case ast.KindImportEqualsDeclaration:
 			return nil, diagnostic(file, sourcePath, statement, "ModuleImport", "unsupported import equals declaration")
 		}
@@ -246,6 +266,17 @@ func moduleImports(file *ast.SourceFile, sourcePath string) ([]dependency, *grap
 	}
 	file.AsNode().ForEachChild(visit)
 	return imports, found
+}
+
+func moduleSpecifier(file *ast.SourceFile, sourcePath string, node *ast.Node) (string, *graph.Diagnostic) {
+	if node.Kind != ast.KindStringLiteral {
+		return "", diagnostic(file, sourcePath, node, "ModuleSpecifier", "unsupported module specifier: expected explicit relative .ts source")
+	}
+	name := node.Text()
+	if !(strings.HasPrefix(name, "./") || strings.HasPrefix(name, "../")) || !strings.HasSuffix(name, ".ts") || strings.HasSuffix(name, ".d.ts") || strings.ContainsAny(name, "\\?#%") {
+		return "", diagnostic(file, sourcePath, node, "ModuleSpecifier", "unsupported module specifier: expected explicit relative .ts source")
+	}
+	return name, nil
 }
 
 func diagnostic(file *ast.SourceFile, sourcePath string, node *ast.Node, construct, message string) *graph.Diagnostic {
