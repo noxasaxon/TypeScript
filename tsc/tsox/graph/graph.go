@@ -190,6 +190,10 @@ type Expression struct {
 	// contributes undefined through short-circuiting.
 	OptionalChain       bool
 	ChainResultOptional bool
+	// ChainResultAsserted checks only the direct link after an optional
+	// receiver is present. A grouped assertion instead unwraps the entire
+	// chain through UnwrapOptional, including its short-circuit result.
+	ChainResultAsserted bool
 	Name                string
 	Operator            string
 	Prefix              bool

@@ -5,6 +5,16 @@ import (
 	"github.com/microsoft/typescript-go/tsox/graph"
 )
 
+// Postfix assertions do not close a chain; grouping does. The parser adds
+// OptionalChain to assertion nodes only when certain following links request
+// it, so inspect the underlying link without crossing any parentheses.
+func assertsOptionalChainLink(operand *ast.Node) bool {
+	for operand.Kind == ast.KindNonNullExpression {
+		operand = operand.AsNonNullExpression().Expression
+	}
+	return operand.Flags&ast.NodeFlagsOptionalChain != 0
+}
+
 // Syntactic ?. tests the actual optional slot even when checker narrowing did
 // not account for an intervening helper's mutation. Explicit ! still requests
 // its existing trapping read and must not acquire optional-chain semantics.

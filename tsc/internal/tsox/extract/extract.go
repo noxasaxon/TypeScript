@@ -714,7 +714,8 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		return b.arrayLiteral(node, valueType)
 
 	case ast.KindNonNullExpression:
-		operand, fence := b.expression(node.AsNonNullExpression().Expression)
+		operandNode := node.AsNonNullExpression().Expression
+		operand, fence := b.expression(operandNode)
 		if fence != nil {
 			return nil, fence
 		}
@@ -726,6 +727,17 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		operand.Type = valueType
 		operand.UnwrapOptional = needsUnwrap
 		operand.NonNullAssertion = true
+		if operand.OptionalChain && assertsOptionalChainLink(operandNode) {
+			// An assertion inside an uninterrupted chain checks the link,
+			// while an absent earlier receiver still short-circuits. Keep
+			// that possible undefined in the graph even when the checker
+			// removes it from the asserted TypeScript value type. The parser
+			// only marks some continued assertions as OptionalChain; the
+			// grouping boundary determines assertion scope in all positions.
+			operand.ChainResultAsserted = true
+			operand.Type.Optional = operand.Receiver.Type.Optional
+			operand.UnwrapOptional = false
+		}
 		return operand, nil
 
 	case ast.KindPropertyAccessExpression:
