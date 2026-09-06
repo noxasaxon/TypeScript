@@ -845,7 +845,7 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 					return nil, fence
 				}
 			}
-			if functionArgument && !b.supportedCallbackArgument(argumentNode) {
+			if functionArgument && !b.supportedCallbackArgument(argumentNode) && !(callee.Type.Parameters[index].Optional && argument.Kind == graph.ExpressionUndefined) {
 				return nil, b.fenceDiagnostic(argumentNode, "FunctionValue", "unsupported construct FunctionValue: callback argument is not a supported function place")
 			}
 			arguments = append(arguments, argument)
