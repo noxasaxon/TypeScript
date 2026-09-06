@@ -66,13 +66,37 @@ type LiteralSite struct {
 	Insertion   int
 }
 
+// ReceiverTarget is an assignable, side-effect-free prefix of an array
+// receiver. Place uses non-null assertions on nullable parents; it is evaluated
+// only from the original index/argument, after optional short circuiting.
+type ReceiverTarget struct {
+	Place       string
+	Type        TypeIdentity // Non-nullable declared type, for replacement donors.
+	Clearable   bool         // Declared type includes undefined, rather than just null.
+	Donors      []string     // Compatible, visible initialized locals; nearest declaration first.
+	RootBinding bool         // Rebinding this prefix writes a lexical root.
+}
+
+// ReceiverEffectSite exposes a scalar index or method argument whose evaluation
+// follows receiver capture. Targets are writable receiver/owner prefixes, from
+// outermost to innermost. Sites with effectful receiver paths are excluded.
+type ReceiverEffectSite struct {
+	Kind      string // "index" or "argument"
+	Statement Span
+	Operand   Span
+	Type      TypeIdentity
+	Targets   []ReceiverTarget
+	TopLevel  bool // Statement is directly in the source file's statement list.
+}
+
 // Result contains either complete checked sites or checker diagnostics.
 type Result struct {
-	Calls       []CallSite
-	Literals    []LiteralSite
-	Bindings    []Binding
-	Identifiers []string
-	Diagnostics []graph.Diagnostic
+	Calls           []CallSite
+	Literals        []LiteralSite
+	Bindings        []Binding
+	Identifiers     []string
+	ReceiverEffects []ReceiverEffectSite
+	Diagnostics     []graph.Diagnostic
 }
 
 // SourceSites groups coordinates and binding identities within one source

@@ -101,7 +101,7 @@ func ExtractModules(entry string, sources map[string]string) mutation.ModulesRes
 func extractEntry(source string, file *ast.SourceFile, typeChecker *checker.Checker) mutation.Result {
 	b := builder{source: source, file: file, checker: typeChecker, ids: make(map[*ast.Symbol]uint32), bindings: make(map[*ast.Symbol]*mutation.Binding)}
 	b.visit(file.AsNode())
-	result := mutation.Result{Calls: b.calls, Literals: b.literals, Identifiers: b.identifiers}
+	result := mutation.Result{Calls: b.calls, Literals: b.literals, Identifiers: b.identifiers, ReceiverEffects: b.receiverEffects}
 	for _, symbol := range b.bindingOrder {
 		result.Bindings = append(result.Bindings, *b.bindings[symbol])
 	}
@@ -118,19 +118,21 @@ func diagnostic(sourcePath string, file *ast.SourceFile, diagnostic *ast.Diagnos
 }
 
 type builder struct {
-	source       string
-	file         *ast.SourceFile
-	checker      *checker.Checker
-	ids          map[*ast.Symbol]uint32
-	nextID       uint32
-	bindings     map[*ast.Symbol]*mutation.Binding
-	bindingOrder []*ast.Symbol
-	calls        []mutation.CallSite
-	literals     []mutation.LiteralSite
-	identifiers  []string
+	source          string
+	file            *ast.SourceFile
+	checker         *checker.Checker
+	ids             map[*ast.Symbol]uint32
+	nextID          uint32
+	bindings        map[*ast.Symbol]*mutation.Binding
+	bindingOrder    []*ast.Symbol
+	calls           []mutation.CallSite
+	literals        []mutation.LiteralSite
+	identifiers     []string
+	receiverEffects []mutation.ReceiverEffectSite
 }
 
 func (b *builder) visit(node *ast.Node) bool {
+	b.recordReceiverEffects(node)
 	if ast.IsIdentifier(node) {
 		b.identifiers = append(b.identifiers, scanner.GetTextOfNode(node))
 		b.recordIdentifier(node)
