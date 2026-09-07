@@ -68,11 +68,51 @@ func ExtractAsyncFiles(entry string, sources map[string]string, entryName, hostN
 	if f != nil {
 		return fail(f)
 	}
+
+	helpers := map[*ast.Symbol]*graph.AsyncHelper{}
+	var helperNodes []*ast.Node
+	var asyncHelpers []*graph.AsyncHelper
+	for _, file := range p.RuntimeFiles {
+		b.file = file
+		for _, n := range file.Statements.Nodes {
+			if n == handler || n == host || n.Kind != ast.KindFunctionDeclaration || !hasModifier(n.Modifiers(), ast.KindAsyncKeyword) {
+				continue
+			}
+			fn := n.AsFunctionDeclaration()
+			if fn.Name() == nil || fn.Body == nil || fn.AsteriskToken != nil || fn.TypeParameters != nil {
+				return fail(b.fenceDiagnostic(n, "AsyncHelper", "async helpers require named non-generic function declarations"))
+			}
+			params, f := b.parameters(fn.Parameters.Nodes)
+			if f != nil {
+				return fail(f)
+			}
+			for _, param := range params {
+				if param.Type.Optional || (param.Type.Kind != graph.TypeString && param.Type.Kind != graph.TypeNumber && param.Type.Kind != graph.TypeBoolean) || (param.BoundaryOptional && param.Default == nil) {
+					return fail(b.fenceDiagnostic(n, "AsyncHelper", "async helper parameters require scalars, optionally with scalar defaults"))
+				}
+			}
+			result, f := b.asyncPromiseResult(fn.Type)
+			if f != nil {
+				return fail(f)
+			}
+			if result.Kind != graph.TypeString || result.Optional {
+				return fail(b.fenceDiagnostic(n, "AsyncHelper", "async helper fulfillment must be a required string"))
+			}
+			binding, f := b.binding(fn.Name())
+			if f != nil {
+				return fail(f)
+			}
+			helper := &graph.AsyncHelper{Binding: binding, Name: fn.Name().Text(), Parameters: params, Program: &graph.AsyncProgram{Position: b.position(n), Result: result}}
+			helpers[b.sourceSymbol(fn.Name())] = helper
+			helperNodes = append(helperNodes, n)
+			asyncHelpers = append(asyncHelpers, helper)
+		}
+	}
 	var module []*graph.Statement
 	for _, file := range p.RuntimeFiles {
 		b.file = file
 		for _, n := range file.Statements.Nodes {
-			if n == handler || n == host {
+			if n == handler || n == host || (n.Kind == ast.KindFunctionDeclaration && n.Name() != nil && helpers[b.sourceSymbol(n.Name())] != nil) {
 				continue
 			}
 			ss, f := b.statement(n, true)
@@ -130,54 +170,74 @@ func ExtractAsyncFiles(entry string, sources map[string]string, entryName, hostN
 			}
 		}
 	}
-	var before []*graph.Statement
-	for _, n := range body {
-		if n.Kind == ast.KindVariableStatement {
-			ds := n.AsVariableStatement().DeclarationList.AsVariableDeclarationList()
-			if len(ds.Declarations.Nodes) == 1 {
-				d := ds.Declarations.Nodes[0].AsVariableDeclaration()
-				if d.Initializer != nil && d.Initializer.Kind == ast.KindAwaitExpression {
-					if d.Name().Kind != ast.KindIdentifier || ds.Flags&ast.NodeFlagsConst == 0 {
-						return fail(b.fenceDiagnostic(n, "AsyncAwait", "await must initialize a const identifier"))
-					}
-					callNode := d.Initializer.AsAwaitExpression().Expression
-					if callNode.Kind != ast.KindCallExpression {
-						return fail(b.fenceDiagnostic(callNode, "AsyncHost", "await requires the selected host operation"))
-					}
-					call := callNode.AsCallExpression()
-					if call.Expression.Kind != ast.KindIdentifier || b.sourceSymbol(call.Expression) != b.sourceSymbol(hd.Name()) || call.QuestionDotToken != nil || call.TypeArguments != nil || len(call.Arguments.Nodes) != 1 {
-						return fail(b.fenceDiagnostic(callNode, "AsyncHost", "await requires the selected ambient host symbol and one string argument"))
-					}
-					arg, f := b.expression(call.Arguments.Nodes[0])
-					if f != nil {
-						return fail(f)
-					}
-					if arg.Type.Kind != graph.TypeString || arg.Type.Optional {
-						return fail(b.fence(call.Arguments.Nodes[0]))
-					}
-					binding, f := b.binding(d.Name())
-					if f != nil {
-						return fail(f)
-					}
-					b.bindingTypes[binding] = graph.Type{Kind: graph.TypeString}
-					operation := graph.AsyncAwait{Position: b.position(d.Initializer), Host: hostBinding, Binding: binding, Name: d.Name().Text(), Argument: arg}
-					a.Stages = append(a.Stages, graph.AsyncStage{Before: before, Await: operation})
-					before = nil
-					continue
-				}
-			}
-		}
-		ss, f := b.statement(n, false)
-		if f != nil {
-			return fail(f)
-		}
-		before = append(before, ss...)
+
+	structured, f := b.asyncBody(body, a, b.sourceSymbol(hd.Name()), hostBinding, helpers)
+	if f != nil {
+		return fail(f)
 	}
-	a.After = before
 	if len(a.Stages) == 0 {
 		return fail(b.fenceDiagnostic(handler, "AsyncAwait", "async entry requires at least one direct const initialization awaiting the selected host"))
 	}
+	if len(asyncHelpers) > 0 || asyncConditionalAwait(structured) {
+		a.Flow = buildAsyncFlow(structured, a.Stages)
+		pruneAsyncFlow(a)
+	} else {
+		var before []*graph.Statement
+		stage := 0
+		for _, s := range structured {
+			if s.Kind == graph.StatementAsyncAwait {
+				a.Stages[stage].Before = before
+				before = nil
+				stage++
+			} else {
+				before = append(before, s)
+			}
+		}
+		a.After = before
+	}
+
+	for i, helper := range asyncHelpers {
+		n := helperNodes[i]
+		b.file = ast.GetSourceFileOfNode(n)
+		b.returnType = &helper.Program.Result
+		body := n.AsFunctionDeclaration().Body.AsBlock().Statements.Nodes
+		// Cleanup belongs to each helper promise, separately from its caller.
+		if len(body) == 1 && body[0].Kind == ast.KindTryStatement {
+			tr := body[0].AsTryStatement()
+			body = tr.TryBlock.AsBlock().Statements.Nodes
+			if tr.CatchClause != nil {
+				ca := tr.CatchClause.AsCatchClause()
+				if ca.VariableDeclaration != nil {
+					return fail(b.fenceDiagnostic(ca.VariableDeclaration, "AsyncCatch", "async helper catch bindings are unsupported"))
+				}
+				helper.Program.HasCatch = true
+				helper.Program.Catch, f = b.statements(ca.Block.AsBlock().Statements.Nodes, false)
+				if f != nil {
+					return fail(f)
+				}
+			}
+			if tr.FinallyBlock != nil {
+				helper.Program.Finally, f = b.statements(tr.FinallyBlock.AsBlock().Statements.Nodes, false)
+				if f != nil {
+					return fail(f)
+				}
+			}
+		}
+		structured, f := b.asyncBody(body, helper.Program, b.sourceSymbol(hd.Name()), hostBinding, helpers)
+		if f != nil {
+			return fail(f)
+		}
+		helper.Program.Flow = buildAsyncFlow(structured, helper.Program.Stages)
+		pruneAsyncFlow(helper.Program)
+	}
 	a.Module = &graph.Program{SourcePath: entry, Shapes: b.shapes, Statements: module}
+	a.Helpers = asyncHelpers
+	for _, helper := range asyncHelpers {
+		helper.Program.Module = a.Module
+	}
+	if f := b.asyncAcyclic(a); f != nil {
+		return fail(f)
+	}
 	return graph.AsyncResult{Program: a}
 }
 
