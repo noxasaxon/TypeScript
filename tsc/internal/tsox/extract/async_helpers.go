@@ -54,6 +54,7 @@ func (b *builder) asyncBody(nodes []*ast.Node, a *graph.AsyncProgram, hostSymbol
 						}
 						var arg *graph.Expression
 						var helper graph.BindingID
+						fulfilled := graph.Type{Kind: graph.TypeString}
 						if b.sourceSymbol(call.Expression) == hostSymbol {
 							if len(call.Arguments.Nodes) != 1 {
 								return nil, b.fenceDiagnostic(callNode, "AsyncHost", "host requires one string argument")
@@ -68,6 +69,7 @@ func (b *builder) asyncBody(nodes []*ast.Node, a *graph.AsyncProgram, hostSymbol
 							}
 						} else if target := helpers[b.sourceSymbol(call.Expression)]; target != nil {
 							helper = target.Binding
+							fulfilled = target.Program.Result
 							var f *fenceError
 							arg, f = b.asyncHelperArguments(callNode, target)
 							if f != nil {
@@ -80,10 +82,10 @@ func (b *builder) asyncBody(nodes []*ast.Node, a *graph.AsyncProgram, hostSymbol
 						if f != nil {
 							return nil, f
 						}
-						b.bindingTypes[binding] = graph.Type{Kind: graph.TypeString}
-						operation := graph.AsyncAwait{Position: b.position(d.Initializer), Host: hostBinding, Helper: helper, Binding: binding, Name: d.Name().Text(), Argument: arg}
+						b.bindingTypes[binding] = fulfilled
+						operation := graph.AsyncAwait{Position: b.position(d.Initializer), Host: hostBinding, Helper: helper, Binding: binding, Name: d.Name().Text(), Type: fulfilled, Argument: arg}
 						a.Stages = append(a.Stages, graph.AsyncStage{Await: operation})
-						before = append(before, &graph.Statement{Kind: graph.StatementAsyncAwait, Binding: binding, Name: operation.Name, Position: operation.Position, Type: graph.Type{Kind: graph.TypeString}, Value: arg})
+						before = append(before, &graph.Statement{Kind: graph.StatementAsyncAwait, Binding: binding, Name: operation.Name, Position: operation.Position, Type: fulfilled, Value: arg})
 						continue
 					}
 				}
@@ -128,7 +130,7 @@ func (b *builder) asyncHelperArguments(node *ast.Node, helper *graph.AsyncHelper
 			args[i] = arg
 		}
 	}
-	result := graph.Type{Kind: graph.TypeString}
+	result := helper.Program.Result
 	return &graph.Expression{Kind: graph.ExpressionCall, Position: b.position(node), Type: result, Callee: &graph.Expression{Kind: graph.ExpressionIdentifier, Binding: helper.Binding, Type: graph.FunctionType(types, result), Position: b.position(call.Expression)}, Arguments: args}, nil
 }
 

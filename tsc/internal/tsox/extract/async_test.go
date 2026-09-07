@@ -2,6 +2,7 @@ package extract
 
 import (
 	"github.com/microsoft/typescript-go/tsox/graph"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -87,5 +88,28 @@ func TestAsyncSequentialStageGraph(t *testing.T) {
 		if stage.Await.Host != stages[0].Await.Host || stage.Await.Position.Line < 1 {
 			t.Fatal("host identity/position lost")
 		}
+	}
+}
+
+func TestAsyncTypedFulfillmentUsesImportedHelperResult(t *testing.T) {
+	sources := map[string]string{
+		"host.ts":   `export declare function hostRead(key:string):Promise<string>;`,
+		"helper.ts": `import{hostRead}from"./host.ts";export interface Data{key:string;}export async function load(key:string):Promise<Data>{const text=await hostRead(key);return{key:text};}`,
+		"entry.ts":  `import{load}from"./helper.ts";interface Input{key:string;}interface Output{text:string;}export async function handler(input:Input):Promise<Output>{const data=await load(input.key);return{text:data.key};}`,
+	}
+	result := ExtractAsyncFiles("entry.ts", sources, "handler", "hostRead")
+	if result.Program == nil {
+		t.Fatal(result.Diagnostics)
+	}
+	a := result.Program
+	if len(a.Helpers) != 1 || !reflect.DeepEqual(a.Stages[0].Await.Type, a.Helpers[0].Program.Result) {
+		t.Fatalf("await lost actual imported fulfillment type: %+v", a.Stages)
+	}
+	op := a.Stages[0].Await
+	if op.Type.Kind != graph.TypeObject || op.Type.Shape == 0 || !reflect.DeepEqual(op.Argument.Type, op.Type) || op.Position.Line < 1 || op.Position.Column < 1 {
+		t.Fatalf("incomplete typed await: %+v", op)
+	}
+	if a.Helpers[0].Program.Stages[0].Await.Type.Kind != graph.TypeString {
+		t.Fatal("host fulfillment must remain string")
 	}
 }

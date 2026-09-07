@@ -92,16 +92,16 @@ func ExtractAsyncChecked(entry string, p *checked.Program, entryName, hostName s
 				return fail(f)
 			}
 			for _, param := range params {
-				if param.Type.Optional || (param.Type.Kind != graph.TypeString && param.Type.Kind != graph.TypeNumber && param.Type.Kind != graph.TypeBoolean) || (param.BoundaryOptional && param.Default == nil) {
-					return fail(b.fenceDiagnostic(n, "AsyncHelper", "async helper parameters require scalars, optionally with scalar defaults"))
+				if param.Type.Optional || !asyncValueType(param.Type) || (param.BoundaryOptional && param.Default == nil) {
+					return fail(b.fenceDiagnostic(n, "AsyncHelper", "async helper parameters require supported values, optionally with defaults"))
 				}
 			}
 			result, f := b.asyncPromiseResult(fn.Type)
 			if f != nil {
 				return fail(f)
 			}
-			if result.Kind != graph.TypeString || result.Optional {
-				return fail(b.fenceDiagnostic(n, "AsyncHelper", "async helper fulfillment must be a required string"))
+			if !asyncValueType(result) {
+				return fail(b.fenceDiagnostic(n, "AsyncHelper", "async helper fulfillment must be a supported required value"))
 			}
 			binding, f := b.binding(fn.Name())
 			if f != nil {
@@ -268,4 +268,8 @@ func (b *builder) asyncPromiseResult(node *ast.Node) (graph.Type, *fenceError) {
 		return graph.Type{}, b.fence(node)
 	}
 	return b.graphType(promised, node)
+}
+
+func asyncValueType(t graph.Type) bool {
+	return !t.Optional && (t.Kind == graph.TypeString || t.Kind == graph.TypeNumber || t.Kind == graph.TypeBoolean || t.Kind == graph.TypeObject || t.Kind == graph.TypeArray)
 }

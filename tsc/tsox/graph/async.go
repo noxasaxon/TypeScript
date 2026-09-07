@@ -27,15 +27,17 @@ type AsyncStage struct {
 }
 
 // AsyncAwait records a checker-resolved host operation and its source position.
-// The initial host contract takes and fulfills with a string; errors are strings.
+// Type is the fulfillment value. The host contract still takes/fulfills strings;
+// direct helper results use their actual type. Rejections currently use strings.
 type AsyncAwait struct {
 	Position Position
 	Host     BindingID
 	// Helper selects an owned child continuation. Argument then contains an
-	// analysis-only scalar call projection, never a synchronous executable call.
+	// analysis-only typed call projection, never a synchronous executable call.
 	Helper   BindingID
 	Binding  BindingID
 	Name     string
+	Type     Type
 	Argument *Expression
 }
 
@@ -68,10 +70,19 @@ type AsyncBlock struct {
 const StatementAsyncAwait StatementKind = "async-await"
 
 // AsyncHelper has its own promise settlement boundary. Parameters and saved
-// scalar locals are owned; no Promise value escapes into the ordinary graph.
+// locals have selected owning storage; no Promise value escapes into the ordinary graph.
 type AsyncHelper struct {
 	Binding    BindingID
 	Name       string
 	Parameters []Parameter
 	Program    *AsyncProgram
+}
+
+// FulfillmentType preserves graphs built through the original string-host API.
+// Newly extracted awaits always record their actual Type.
+func (a AsyncAwait) FulfillmentType() Type {
+	if a.Type.Kind == "" {
+		return Type{Kind: TypeString}
+	}
+	return a.Type
 }
