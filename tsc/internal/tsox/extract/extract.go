@@ -116,6 +116,7 @@ func typescriptDiagnostic(sourcePath string, file *ast.SourceFile, diagnostic *a
 }
 
 type builder struct {
+	asyncThrow    bool
 	sourcePath    string
 	file          *ast.SourceFile
 	checker       *checker.Checker
@@ -358,6 +359,19 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 			return nil, fence
 		}
 		return []*graph.Statement{statement}, nil
+
+	case ast.KindThrowStatement:
+		if !b.asyncThrow {
+			return nil, b.fence(node)
+		}
+		value, fence := b.expression(node.AsThrowStatement().Expression)
+		if fence != nil {
+			return nil, fence
+		}
+		if value.Type.Kind != graph.TypeString || value.Type.Optional {
+			return nil, b.fenceDiagnostic(node, "AsyncThrow", "async host supports string throws only")
+		}
+		return []*graph.Statement{{Kind: graph.StatementThrow, Position: b.position(node), Value: value}}, nil
 
 	case ast.KindReturnStatement:
 		data := node.AsReturnStatement()

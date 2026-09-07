@@ -40,3 +40,16 @@ func ExtractGraphFile(sourcePath string) graph.Result {
 	}
 	return result
 }
+
+// ExtractAsyncGraphFiles checks the separate bounded asynchronous host surface.
+func ExtractAsyncGraphFiles(entry string, sources map[string]string, entryName, hostName string) graph.AsyncResult {
+	return extract.ExtractAsyncFiles(entry, sources, entryName, hostName)
+}
+
+func ExtractAsyncGraphFile(sourcePath, entryName, hostName string) graph.AsyncResult {
+	entry, sources, diagnostics := ReadSourceFiles(sourcePath)
+	if len(diagnostics) != 0 {
+		return graph.AsyncResult{Diagnostics: diagnostics}
+	}
+	return extract.ExtractAsyncFiles(entry, sources, entryName, hostName)
+}
