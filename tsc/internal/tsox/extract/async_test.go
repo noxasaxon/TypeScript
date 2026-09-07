@@ -42,3 +42,30 @@ func TestAsyncHostSymbolIdentity(t *testing.T) {
 		t.Fatalf("shadowed host admitted: %+v", r)
 	}
 }
+
+func TestAsyncImportedSynchronousHelpers(t *testing.T) {
+	sources := map[string]string{
+		"entry.ts": `import type {Input,Output} from "./helpers.ts"; import {key,respond} from "./helpers.ts";
+declare function hostRead(key: string): Promise<string>;
+export async function handler(input: Input): Promise<Output> {const text=await hostRead(key(input));return respond(text);}`,
+		"helpers.ts": `export interface Input { key: string; } export interface Output { text: string; }
+export function key(input: Input): string { if(input.key==="bad"){throw "key";} return input.key; }
+export function respond(text: string): Output { return {text:text}; }`,
+	}
+	r := ExtractAsyncFiles("entry.ts", sources, "handler", "hostRead")
+	if r.Program == nil {
+		t.Fatal(r.Diagnostics)
+	}
+	var helper *graph.Statement
+	for _, statement := range r.Program.Module.Statements {
+		if statement.Name == "key" {
+			helper = statement
+		}
+	}
+	if helper == nil || helper.Position.SourcePath != "helpers.ts" || r.Program.Await.Argument.Callee.Binding != helper.Binding {
+		t.Fatal("imported helper binding/position lost")
+	}
+	if r.Program.After[0].Value.Kind != graph.ExpressionCall {
+		t.Fatal("response factory call lost")
+	}
+}

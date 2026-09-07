@@ -75,9 +75,6 @@ func ExtractAsyncFiles(entry string, sources map[string]string, entryName, hostN
 			if n == handler || n == host {
 				continue
 			}
-			if n.Kind == ast.KindFunctionDeclaration {
-				return fail(b.fenceDiagnostic(n, "AsyncHelper", "async helpers are outside the first host entrypoint"))
-			}
 			ss, f := b.statement(n, true)
 			if f != nil {
 				return fail(f)
