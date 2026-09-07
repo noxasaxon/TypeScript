@@ -13,6 +13,11 @@ func ExtractFiles(entry string, sources map[string]string) graph.Result {
 	if len(diagnostics) != 0 {
 		return graph.Result{Diagnostics: diagnostics}
 	}
+	return ExtractChecked(entry, program)
+}
+
+// ExtractChecked extracts a checked immutable project in its original checker domain.
+func ExtractChecked(entry string, program *checked.Program) graph.Result {
 	typeChecker, done := program.Compiler.GetTypeChecker(context.Background())
 	defer done()
 	b := &builder{sourcePath: entry, file: program.Entry, checker: typeChecker,

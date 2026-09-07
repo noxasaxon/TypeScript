@@ -101,6 +101,10 @@ func sourceError(name string, err error) graph.Diagnostic {
 // New checks a complete source snapshot and computes ECMAScript dependency
 // evaluation order. Import aliases stay in the same checker's symbol domain.
 func New(entry string, sources map[string]string) (*Program, []graph.Diagnostic) {
+	return newProgram(entry, sources, nil)
+}
+
+func newProgram(entry string, sources map[string]string, configured *tsoptions.ParsedCommandLine) (*Program, []graph.Diagnostic) {
 	files := make(map[string]string, len(sources))
 	labels := make(map[string]string, len(sources))
 	keys := make([]string, 0, len(sources))
@@ -122,9 +126,26 @@ func New(entry string, sources map[string]string) (*Program, []graph.Diagnostic)
 	fs := bundled.WrapFS(vfstest.FromMap(files, true))
 	host := compiler.NewCompilerHost("/", fs, bundled.LibPath(), nil, nil)
 	options := &core.CompilerOptions{Strict: core.TSTrue, ModuleDetection: core.ModuleDetectionKindForce, Module: core.ModuleKindESNext, ModuleResolution: core.ModuleResolutionKindBundler, AllowImportingTsExtensions: core.TSTrue, NoEmit: core.TSTrue, VerbatimModuleSyntax: core.TSTrue}
-	config := tsoptions.NewParsedCommandLine(options, []string{entryKey}, tspath.ComparePathsOptions{UseCaseSensitiveFileNames: true, CurrentDirectory: "/"})
+	config := configured
+	if config == nil {
+		config = tsoptions.NewParsedCommandLine(options, []string{entryKey}, tspath.ComparePathsOptions{UseCaseSensitiveFileNames: true, CurrentDirectory: "/"})
+	}
 	program := compiler.NewProgram(compiler.ProgramOptions{Config: config, Host: host, SingleThreaded: core.TSTrue})
 	program.BindSourceFiles()
+	if configured != nil {
+		if ds := program.GetProgramDiagnostics(); len(ds) != 0 {
+			return nil, projectDiagnostics(config.ConfigName(), ds)
+		}
+		if ds := program.GetGlobalDiagnostics(context.Background()); len(ds) != 0 {
+			return nil, projectDiagnostics(config.ConfigName(), ds)
+		}
+		if ds := program.GetSyntacticDiagnostics(context.Background(), nil); len(ds) != 0 {
+			return nil, projectDiagnostics(config.ConfigName(), ds)
+		}
+		if ds := program.GetSemanticDiagnostics(context.Background(), nil); len(ds) != 0 {
+			return nil, projectDiagnostics(config.ConfigName(), ds)
+		}
+	}
 	result := &Program{Compiler: program, Entry: program.GetSourceFile(entryKey), Files: make(map[*ast.SourceFile]string)}
 	if result.Entry == nil {
 		return nil, []graph.Diagnostic{sourceError(entry, fmt.Errorf("TypeScript program did not load entry source"))}

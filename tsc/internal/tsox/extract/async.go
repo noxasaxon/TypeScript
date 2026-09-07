@@ -15,6 +15,11 @@ func ExtractAsyncFiles(entry string, sources map[string]string, entryName, hostN
 	if len(diagnostics) != 0 {
 		return graph.AsyncResult{Diagnostics: diagnostics}
 	}
+	return ExtractAsyncChecked(entry, p, entryName, hostName)
+}
+
+// ExtractAsyncChecked preserves the configured project's checker and identities.
+func ExtractAsyncChecked(entry string, p *checked.Program, entryName, hostName string) graph.AsyncResult {
 	c, done := p.Compiler.GetTypeChecker(context.Background())
 	defer done()
 	b := &builder{sourcePath: entry, file: p.Entry, checker: c, bindings: make(map[*ast.Symbol]graph.BindingID), bindingTypes: make(map[graph.BindingID]graph.Type), nextBinding: 1, shapeIDs: make(map[*ast.Symbol]graph.ShapeID), shapeBuilding: make(map[*ast.Symbol]bool), moduleFiles: p.Files, entryFile: p.Entry, asyncThrow: true}
