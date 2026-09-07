@@ -130,16 +130,13 @@ func ExtractAsyncFiles(entry string, sources map[string]string, entryName, hostN
 			}
 		}
 	}
-	found := false
+	var before []*graph.Statement
 	for _, n := range body {
 		if n.Kind == ast.KindVariableStatement {
 			ds := n.AsVariableStatement().DeclarationList.AsVariableDeclarationList()
 			if len(ds.Declarations.Nodes) == 1 {
 				d := ds.Declarations.Nodes[0].AsVariableDeclaration()
 				if d.Initializer != nil && d.Initializer.Kind == ast.KindAwaitExpression {
-					if found {
-						return fail(b.fenceDiagnostic(d.Initializer, "AsyncAwait", "only one direct awaited host operation is supported"))
-					}
 					if d.Name().Kind != ast.KindIdentifier || ds.Flags&ast.NodeFlagsConst == 0 {
 						return fail(b.fenceDiagnostic(n, "AsyncAwait", "await must initialize a const identifier"))
 					}
@@ -163,8 +160,9 @@ func ExtractAsyncFiles(entry string, sources map[string]string, entryName, hostN
 						return fail(f)
 					}
 					b.bindingTypes[binding] = graph.Type{Kind: graph.TypeString}
-					a.Await = graph.AsyncAwait{Position: b.position(d.Initializer), Host: hostBinding, Binding: binding, Name: d.Name().Text(), Argument: arg}
-					found = true
+					operation := graph.AsyncAwait{Position: b.position(d.Initializer), Host: hostBinding, Binding: binding, Name: d.Name().Text(), Argument: arg}
+					a.Stages = append(a.Stages, graph.AsyncStage{Before: before, Await: operation})
+					before = nil
 					continue
 				}
 			}
@@ -173,14 +171,11 @@ func ExtractAsyncFiles(entry string, sources map[string]string, entryName, hostN
 		if f != nil {
 			return fail(f)
 		}
-		if found {
-			a.After = append(a.After, ss...)
-		} else {
-			a.Before = append(a.Before, ss...)
-		}
+		before = append(before, ss...)
 	}
-	if !found {
-		return fail(b.fenceDiagnostic(handler, "AsyncAwait", "async entry requires one direct const initialization awaiting the selected host"))
+	a.After = before
+	if len(a.Stages) == 0 {
+		return fail(b.fenceDiagnostic(handler, "AsyncAwait", "async entry requires at least one direct const initialization awaiting the selected host"))
 	}
 	a.Module = &graph.Program{SourcePath: entry, Shapes: b.shapes, Statements: module}
 	return graph.AsyncResult{Program: a}

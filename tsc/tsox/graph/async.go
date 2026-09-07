@@ -1,18 +1,24 @@
 package graph
 
-// AsyncProgram is the separately admitted one-suspension host entrypoint. The
+// AsyncProgram is the separately admitted sequential host entrypoint. The
 // ordinary Program cannot accidentally interpret an await as synchronous work.
 type AsyncProgram struct {
 	Module   *Program
 	Position Position
 	Input    Parameter
 	Result   Type
-	Before   []*Statement
-	Await    AsyncAwait
+	Stages   []AsyncStage
 	After    []*Statement
 	Catch    []*Statement
 	HasCatch bool
 	Finally  []*Statement
+}
+
+// AsyncStage contains synchronous work followed by one direct host suspension.
+// Stages are ordered; After runs following the final completion.
+type AsyncStage struct {
+	Before []*Statement
+	Await  AsyncAwait
 }
 
 // AsyncAwait records a checker-resolved host operation and its source position.

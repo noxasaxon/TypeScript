@@ -20,8 +20,8 @@ func TestAsyncGraphBoundary(t *testing.T) {
 		t.Fatal(r.Diagnostics)
 	}
 	a := r.Program
-	if a.Await.Host == 0 || a.Await.Binding == 0 || a.Await.Position.Line != 5 || a.Await.Argument.Kind != graph.ExpressionProperty || len(a.After) != 1 {
-		t.Fatalf("incomplete await graph: %+v", a.Await)
+	if a.Stages[0].Await.Host == 0 || a.Stages[0].Await.Binding == 0 || a.Stages[0].Await.Position.Line != 5 || a.Stages[0].Await.Argument.Kind != graph.ExpressionProperty || len(a.After) != 1 {
+		t.Fatalf("incomplete await graph: %+v", a.Stages[0].Await)
 	}
 	// The regular entrypoint must keep rejecting async source.
 	ordinary := ExtractFiles("entry.ts", map[string]string{"entry.ts": asyncSource})
@@ -62,10 +62,30 @@ export function respond(text: string): Output { return {text:text}; }`,
 			helper = statement
 		}
 	}
-	if helper == nil || helper.Position.SourcePath != "helpers.ts" || r.Program.Await.Argument.Callee.Binding != helper.Binding {
+	if helper == nil || helper.Position.SourcePath != "helpers.ts" || r.Program.Stages[0].Await.Argument.Callee.Binding != helper.Binding {
 		t.Fatal("imported helper binding/position lost")
 	}
 	if r.Program.After[0].Value.Kind != graph.ExpressionCall {
 		t.Fatal("response factory call lost")
+	}
+}
+
+func TestAsyncSequentialStageGraph(t *testing.T) {
+	source := strings.Replace(asyncSource, "return {text:text};", `const next=text+".data"; const second=await hostRead(next); const third=await hostRead(second); return {text:third};`, 1)
+	r := ExtractAsyncFiles("entry.ts", map[string]string{"entry.ts": source}, "handler", "hostRead")
+	if r.Program == nil {
+		t.Fatal(r.Diagnostics)
+	}
+	stages := r.Program.Stages
+	if len(stages) != 3 || len(stages[1].Before) != 1 || len(stages[2].Before) != 0 {
+		t.Fatalf("lost sequential stages: %+v", stages)
+	}
+	if stages[1].Await.Argument.Binding != stages[1].Before[0].Binding || stages[2].Await.Argument.Binding != stages[1].Await.Binding {
+		t.Fatal("dependent await bindings lost")
+	}
+	for _, stage := range stages {
+		if stage.Await.Host != stages[0].Await.Host || stage.Await.Position.Line < 1 {
+			t.Fatal("host identity/position lost")
+		}
 	}
 }
