@@ -179,7 +179,10 @@ type Expression struct {
 	Type     Type
 	Number   float64
 	String   string
-	Boolean  bool
+	// StringUnits is non-nil only for a code-unit-preserving literal. String
+	// then stays empty; consumers must not decode units with replacement.
+	StringUnits []uint16
+	Boolean     bool
 	// UnwrapOptional records a checker-proved use-site narrowing from the
 	// declaration's T | undefined type to T. The emitter must trap if the
 	// option is nevertheless empty at runtime.

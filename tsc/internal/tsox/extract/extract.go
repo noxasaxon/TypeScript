@@ -26,6 +26,12 @@ const virtualMainPath = "/src/main.ts"
 // Extract checks source with one TypeScript checker and either returns the
 // semantic graph or one source-order fence diagnostic.
 func Extract(sourcePath string, source string) graph.Result {
+	return extractSource(sourcePath, source, false)
+}
+
+// jsonValues stages graph contracts internally; it is not a public source mode.
+// Keep disabled at every public entry until all consumers implement the domain.
+func extractSource(sourcePath string, source string, jsonValues bool) graph.Result {
 	if sourcePath == "" {
 		sourcePath = "main.ts"
 	}
@@ -74,6 +80,7 @@ func Extract(sourcePath string, source string) graph.Result {
 	defer done()
 
 	b := &builder{
+		jsonValues:    jsonValues,
 		sourcePath:    sourcePath,
 		file:          file,
 		checker:       typeChecker,
@@ -116,6 +123,7 @@ func typescriptDiagnostic(sourcePath string, file *ast.SourceFile, diagnostic *a
 }
 
 type builder struct {
+	jsonValues    bool
 	asyncThrow    bool
 	sourcePath    string
 	file          *ast.SourceFile
@@ -320,12 +328,18 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 		if fence != nil {
 			return nil, fence
 		}
+		if b.jsonValues {
+			iterable = unknownProjection(iterable, graph.Type{Kind: graph.TypeArray, Element: &graph.Type{Kind: graph.TypeUnknown}})
+		}
 		if iterable.Type.Kind != graph.TypeArray || iterable.Type.Element == nil {
 			return nil, b.fenceWithMessage(node, "unsupported for-of source type")
 		}
-		valueType, fence := b.checkedType(nameNode)
-		if fence != nil {
-			return nil, fence
+		valueType := *iterable.Type.Element
+		if !b.jsonValues || valueType.Kind != graph.TypeUnknown {
+			valueType, fence = b.checkedType(nameNode)
+			if fence != nil {
+				return nil, fence
+			}
 		}
 		if !sameType(valueType, *iterable.Type.Element) {
 			return nil, b.typeFlowFence(nameNode, valueType, *iterable.Type.Element)
@@ -469,7 +483,11 @@ func (b *builder) variableDeclarations(node *ast.Node) ([]*graph.Statement, *fen
 		} else {
 			value, fence = b.expression(declaration.Initializer)
 			if fence == nil {
-				valueType, fence = b.checkedType(nameNode)
+				if b.jsonValues && value.Type.Kind == graph.TypeUnknown {
+					valueType = value.Type
+				} else {
+					valueType, fence = b.checkedType(nameNode)
+				}
 				b.narrowOptionalChainForSlot(declaration.Initializer, valueType, value)
 			}
 		}
@@ -629,6 +647,11 @@ func (b *builder) parameters(nodes []*ast.Node) ([]graph.Parameter, *fenceError)
 }
 
 func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
+	if b.jsonValues {
+		if value, fence, handled := b.jsonValueExpression(node); handled {
+			return value, fence
+		}
+	}
 	switch node.Kind {
 	case ast.KindNumericLiteral:
 		return &graph.Expression{
@@ -764,6 +787,11 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		receiver, fence := b.expression(data.Expression)
 		if fence != nil {
 			return nil, fence
+		}
+		if b.jsonValues {
+			if value, fence, handled := b.jsonValueProperty(node, receiver); handled {
+				return value, fence
+			}
 		}
 		restoreOptionalChainReceiver(receiver, data.QuestionDotToken != nil)
 		if !chain {
@@ -997,6 +1025,9 @@ func (b *builder) expressionForSlot(node *ast.Node, slot graph.Type) (*graph.Exp
 	value, fence := b.expression(node)
 	b.literalSlot = previous
 	if fence == nil {
+		if b.jsonValues {
+			value = unknownProjection(value, slot)
+		}
 		b.narrowOptionalChainForSlot(node, slot, value)
 	}
 	return value, fence
@@ -1381,6 +1412,11 @@ func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceErr
 	if fence != nil {
 		return nil, fence
 	}
+	if b.jsonValues && operator != "&&" && operator != "||" {
+		if value, fence, handled := b.jsonValueBinary(node, operator, left, right); handled {
+			return value, fence
+		}
+	}
 	if operator != "===" && operator != "!==" {
 		b.narrowOptionalChainUse(data.Left, left)
 		b.narrowOptionalChainUse(data.Right, right)
@@ -1567,6 +1603,13 @@ func (b *builder) checkedType(node *ast.Node) (graph.Type, *fenceError) {
 }
 
 func (b *builder) expressionType(node *ast.Node) (graph.Type, bool, *fenceError) {
+	if b.jsonValues {
+		if symbol := b.sourceSymbol(node); symbol != nil {
+			if stored, ok := b.bindingTypes[b.bindings[symbol]]; ok && stored.Kind == graph.TypeUnknown {
+				return stored, false, nil
+			}
+		}
+	}
 	symbol := b.sourceSymbol(node)
 	if symbol == nil {
 		useType, fence := b.checkedType(node)
@@ -1580,6 +1623,9 @@ func (b *builder) expressionType(node *ast.Node) (graph.Type, bool, *fenceError)
 }
 
 func (b *builder) optionalUseType(node *ast.Node, declaredType graph.Type) (graph.Type, bool, *fenceError) {
+	if b.jsonValues && declaredType.Kind == graph.TypeUnknown {
+		return declaredType, false, nil
+	}
 	checkerUseType := b.checker.GetTypeAtLocation(node)
 	if checkerUseType.Flags()&checker.TypeFlagsUndefined != 0 && declaredType.Optional {
 		return declaredType, false, nil
@@ -1695,6 +1741,9 @@ func (b *builder) ensureNamedShape(symbol *ast.Symbol, useNode *ast.Node) (graph
 }
 
 func (b *builder) validateTypeNode(node *ast.Node) *fenceError {
+	if b.jsonValues && node.Kind == ast.KindUnknownKeyword {
+		return nil
+	}
 	switch node.Kind {
 	case ast.KindNumberKeyword, ast.KindStringKeyword, ast.KindBooleanKeyword, ast.KindVoidKeyword:
 		return nil
@@ -1734,6 +1783,9 @@ func (b *builder) validateTypeNode(node *ast.Node) *fenceError {
 
 func (b *builder) graphType(value *checker.Type, node *ast.Node) (graph.Type, *fenceError) {
 	flags := value.Flags()
+	if b.jsonValues && flags&checker.TypeFlagsUnknown != 0 {
+		return graph.Type{Kind: graph.TypeUnknown}, nil
+	}
 	if flags&checker.TypeFlagsNever != 0 {
 		return graph.Type{}, b.fenceDiagnostic(node, "UnreachableUse", "unsupported construct UnreachableUse")
 	}
