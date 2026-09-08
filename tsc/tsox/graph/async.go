@@ -32,6 +32,8 @@ type AsyncStage struct {
 // Type is the fulfillment value. The host contract still takes/fulfills strings;
 // direct helper results use their actual type. Rejections currently use strings.
 type AsyncAwait struct {
+	// Promise belongs only to the explicit provisional callable-body lane.
+	Promise *Expression
 	// Producer is exclusive with the legacy Host/Argument and direct Helper lanes.
 	Producer *AsyncProducer
 	Position Position

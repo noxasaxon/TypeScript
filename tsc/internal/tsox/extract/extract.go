@@ -123,24 +123,29 @@ func typescriptDiagnostic(sourcePath string, file *ast.SourceFile, diagnostic *a
 }
 
 type builder struct {
-	standardEntry     bool
-	jsonValues        bool
-	jsonShapeIDs      map[*checker.Type]graph.ShapeID
-	jsonShapeBuilding map[*checker.Type]bool
-	asyncThrow        bool
-	sourcePath        string
-	file              *ast.SourceFile
-	checker           *checker.Checker
-	bindings          map[*ast.Symbol]graph.BindingID
-	bindingTypes      map[graph.BindingID]graph.Type
-	nextBinding       graph.BindingID
-	shapes            []graph.Shape
-	shapeIDs          map[*ast.Symbol]graph.ShapeID
-	shapeBuilding     map[*ast.Symbol]bool
-	returnType        *graph.Type
-	literalSlot       *graph.Type
-	moduleFiles       map[*ast.SourceFile]string
-	entryFile         *ast.SourceFile
+	scopedStatementSources  map[*graph.Statement]SourceBodyNode
+	scopedExpressionSources map[*graph.Expression]SourceBodyNode
+	sourceRecovery          *sourceRecoveryContext
+	sourceBodies            *SourceHelperBodies
+	middleware              *middlewareBodyContext
+	standardEntry           bool
+	jsonValues              bool
+	jsonShapeIDs            map[*checker.Type]graph.ShapeID
+	jsonShapeBuilding       map[*checker.Type]bool
+	asyncThrow              bool
+	sourcePath              string
+	file                    *ast.SourceFile
+	checker                 *checker.Checker
+	bindings                map[*ast.Symbol]graph.BindingID
+	bindingTypes            map[graph.BindingID]graph.Type
+	nextBinding             graph.BindingID
+	shapes                  []graph.Shape
+	shapeIDs                map[*ast.Symbol]graph.ShapeID
+	shapeBuilding           map[*ast.Symbol]bool
+	returnType              *graph.Type
+	literalSlot             *graph.Type
+	moduleFiles             map[*ast.SourceFile]string
+	entryFile               *ast.SourceFile
 }
 
 type fenceError struct {
@@ -159,7 +164,39 @@ func (b *builder) statements(nodes []*ast.Node, topLevel bool) ([]*graph.Stateme
 	return result, nil
 }
 
-func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, *fenceError) {
+func (b *builder) statement(node *ast.Node, topLevel bool) (result []*graph.Statement, failure *fenceError) {
+	if b.scopedStatementSources != nil {
+		defer func() {
+			if failure == nil {
+				for _, s := range result {
+					if _, ok := b.scopedStatementSources[s]; !ok {
+						b.scopedStatementSources[s] = b.sourceBodyNode(node)
+					}
+				}
+			}
+		}()
+	}
+
+	if b.sourceRecovery != nil {
+		defer func() {
+			if failure == nil {
+				site, e := b.sourceRecovery.scope.ActualSite(node)
+				if e != nil {
+					panic(e)
+				}
+				for _, s := range result {
+					if _, ok := b.sourceRecovery.out.Statements[s]; !ok {
+						b.sourceRecovery.out.Statements[s] = site
+					}
+				}
+			}
+		}()
+	}
+	if b.sourceRecovery != nil {
+		if ss, f, ok := b.sourceStatement(node); ok {
+			return ss, f
+		}
+	}
 	switch node.Kind {
 	case ast.KindImportDeclaration, ast.KindExportDeclaration:
 		if b.moduleFiles != nil {
@@ -373,6 +410,9 @@ func (b *builder) statementBody(node *ast.Node) ([]*graph.Statement, *fenceError
 }
 
 func (b *builder) variableDeclarations(node *ast.Node) ([]*graph.Statement, *fenceError) {
+	if b.sourceRecovery != nil {
+		return b.sourceVariableDeclarations(node)
+	}
 	if node.Kind != ast.KindVariableDeclarationList {
 		return nil, b.fence(node)
 	}
@@ -414,7 +454,7 @@ func (b *builder) variableDeclarations(node *ast.Node) ([]*graph.Statement, *fen
 		var value *graph.Expression
 		var valueType graph.Type
 		var fence *fenceError
-		if declaration.Type != nil {
+		if declaration.Type != nil || (b.sourceBodies != nil && initializerValue.Kind == ast.KindObjectLiteralExpression) {
 			valueType, fence = b.checkedType(nameNode)
 			if fence == nil {
 				value, fence = b.expressionForSlot(declaration.Initializer, valueType)
@@ -585,7 +625,49 @@ func (b *builder) parameters(nodes []*ast.Node) ([]graph.Parameter, *fenceError)
 	return parameters, nil
 }
 
-func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
+func (b *builder) expression(node *ast.Node) (value *graph.Expression, failure *fenceError) {
+	if b.scopedExpressionSources != nil {
+		defer func() {
+			if failure == nil && value != nil {
+				if _, ok := b.scopedExpressionSources[value]; !ok {
+					b.scopedExpressionSources[value] = b.sourceBodyNode(node)
+				}
+			}
+		}()
+	}
+
+	if b.sourceRecovery != nil {
+		defer func() {
+			if failure == nil && value != nil {
+				b.sourceRecovery.recordExpression(node, value)
+			}
+		}()
+		if x, f, ok := b.sourceExpression(node); ok {
+			return x, f
+		}
+	}
+	defer func() {
+		if failure == nil && value != nil && value.OptionalChain {
+			if link := optionalSourceLink(node); link != nil {
+				value.OptionalLink = link
+			}
+		}
+	}()
+	if b.sourceBodies != nil {
+		defer func() {
+			if failure == nil && value != nil {
+				if _, exists := b.sourceBodies.Expressions[value]; !exists {
+					b.sourceBodies.Expressions[value] = b.sourceBodyNode(node)
+				}
+			}
+		}()
+	}
+
+	if b.middleware != nil {
+		if value, f, handled := b.middleware.expression(node); handled {
+			return value, f
+		}
+	}
 	if node.Kind == ast.KindConditionalExpression {
 		return b.conditionalExpression(node)
 	}
@@ -677,6 +759,13 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 			return b.objectLiteral(node, valueType)
 		}
 		if contextualType == nil {
+			if b.sourceBodies != nil {
+				actualType, f := b.checkedType(node)
+				if f != nil {
+					return nil, f
+				}
+				return b.jsonObjectLiteral(node, actualType)
+			}
 			return nil, b.fenceWithMessage(node, "unsupported anonymous shape")
 		}
 		valueType, fence := b.graphType(contextualType, node)
@@ -1353,7 +1442,10 @@ func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceErr
 				return nil, fence
 			}
 		}
-		if (operator == "=" && !slotAccepts(left.Type, right)) || (operator != "=" && !validAssignment(operator, left.Type, right.Type)) {
+		if (operator == "=" && !slotAccepts(left.Type, right) && !b.sourceLayoutTransfer(node, left.Type, right)) || (operator != "=" && !validAssignment(operator, left.Type, right.Type)) {
+			if b.sourceBodies != nil {
+				return nil, b.typeFlowFence(node, left.Type, right.Type)
+			}
 			return nil, b.fence(node)
 		}
 		if operator == "=" {
@@ -1427,7 +1519,7 @@ func (b *builder) binaryExpression(node *ast.Node) (*graph.Expression, *fenceErr
 		((left.Type.Optional && right.Kind == graph.ExpressionUndefined) || (right.Type.Optional && left.Kind == graph.ExpressionUndefined))
 	optionalValueEquality := (operator == "===" || operator == "!==") &&
 		(left.Type.Optional || right.Type.Optional) && sameInnerType(left.Type, right.Type)
-	if !optionalUndefinedEquality && !optionalValueEquality && !validBinary(operator, left.Type, right.Type, valueType) {
+	if !optionalUndefinedEquality && !optionalValueEquality && !(b.sourceBodies != nil && sourceNullableEquality(operator, left.Type, right.Type)) && !validBinary(operator, left.Type, right.Type, valueType) {
 		return nil, b.fence(node)
 	}
 	return &graph.Expression{
@@ -1518,7 +1610,7 @@ func (b *builder) updateExpression(node *ast.Node, operandNode *ast.Node, operat
 
 func (b *builder) arrowExpression(node *ast.Node) (*graph.Expression, *fenceError) {
 	data := node.AsArrowFunction()
-	if data.Modifiers() != nil || data.TypeParameters != nil || data.Body == nil || data.Body.Kind != ast.KindBlock {
+	if data.Modifiers() != nil || data.TypeParameters != nil || data.Body == nil || (data.Body.Kind != ast.KindBlock && b.sourceBodies == nil) {
 		return nil, b.fence(node)
 	}
 	if data.Type != nil {
@@ -1540,7 +1632,21 @@ func (b *builder) arrowExpression(node *ast.Node) (*graph.Expression, *fenceErro
 	applyParameterBoundaryOptionality(&functionType, parameters)
 	previousReturnType := b.returnType
 	b.returnType = functionType.Result
-	body, fence := b.statements(data.Body.AsBlock().Statements.Nodes, false)
+	var body []*graph.Statement
+	if data.Body.Kind == ast.KindBlock {
+		body, fence = b.statements(data.Body.AsBlock().Statements.Nodes, false)
+	} else {
+		var result *graph.Expression
+		result, fence = b.expressionForSlot(data.Body, *functionType.Result)
+		if fence == nil {
+			if !slotAccepts(*functionType.Result, result) {
+				fence = b.typeFlowFence(data.Body, *functionType.Result, result.Type)
+			} else {
+				adaptUndefinedToSlot(*functionType.Result, result)
+				body = []*graph.Statement{{Kind: graph.StatementReturn, Position: b.position(data.Body), Value: result}}
+			}
+		}
+	}
 	b.returnType = previousReturnType
 	if fence != nil {
 		return nil, fence
@@ -1556,6 +1662,9 @@ func (b *builder) arrowExpression(node *ast.Node) (*graph.Expression, *fenceErro
 }
 
 func (b *builder) booleanExpression(node *ast.Node) (*graph.Expression, *fenceError) {
+	if b.sourceRecovery != nil {
+		return b.expression(node)
+	}
 	expression, fence := b.expression(node)
 	if fence != nil {
 		return nil, fence
@@ -1758,6 +1867,20 @@ func (b *builder) validateTypeNode(node *ast.Node) *fenceError {
 }
 
 func (b *builder) graphType(value *checker.Type, node *ast.Node) (graph.Type, *fenceError) {
+	if typ, f, handled := b.sourcePromiseTuple(value, node); handled {
+		return typ, f
+	}
+	if b.middleware != nil {
+		// This is source schema recovery only. Actual call/await operations
+		// retain pending intrinsic, origin and invocation obligations.
+		if promised := b.checker.GetPromisedTypeOfPromise(value); promised != nil {
+			element, fence := b.graphType(promised, node)
+			if fence != nil {
+				return graph.Type{}, fence
+			}
+			return graph.Type{Kind: graph.TypePromiseValue, Element: &element}, nil
+		}
+	}
 	if typ, ok := b.platformValueType(value); ok {
 		return typ, nil
 	}
@@ -1940,6 +2063,9 @@ func (b *builder) typeFlowFence(node *ast.Node, target graph.Type, source graph.
 }
 
 func (b *builder) binding(node *ast.Node) (graph.BindingID, *fenceError) {
+	if b.sourceRecovery != nil {
+		return b.sourceBinding(node)
+	}
 	symbol := b.sourceSymbol(node)
 	if symbol == nil {
 		return 0, b.fenceWithMessage(node, "identifier has no checker symbol")

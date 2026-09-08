@@ -9,6 +9,7 @@ import (
 
 	"github.com/microsoft/typescript-go/internal/tsox/checked"
 	"github.com/microsoft/typescript-go/tsox/graph"
+	sourcefixture "github.com/microsoft/typescript-go/tsox/testfixture"
 )
 
 func TestJSONClosedLayoutUnchangedValidator(t *testing.T) {
@@ -116,7 +117,15 @@ func TestJSONBackendFixturesMatchCurrentExtraction(t *testing.T) {
 	directory := filepath.Join("..", "..", "..", "..", "..", "..", "go", "internal", "evidence", "testdata", "json-values")
 	files, err := os.ReadDir(directory)
 	if os.IsNotExist(err) {
-		t.Skip("parent backend fixture directory is absent in standalone fork")
+		parent := filepath.Clean(filepath.Join(directory, "..", "..", "..", "..", ".."))
+		integrated, parentErr := jsonIntegratedFixtureParent(parent)
+		if parentErr != nil {
+			t.Fatal(parentErr)
+		}
+		if integrated {
+			t.Fatalf("required parent backend fixture directory is absent: %s", directory)
+		}
+		t.Skip("parent checkout is absent in standalone fork")
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -158,5 +167,44 @@ func TestJSONBackendFixturesMatchCurrentExtraction(t *testing.T) {
 				t.Fatal("backend graph fixture differs from current extraction of its actual source")
 			}
 		})
+	}
+}
+
+// Distinguish a missing required fixture from a genuinely absent parent checkout.
+// The exact expected outer parent is checked, not an arbitrary ancestor search.
+func jsonIntegratedFixtureParent(parent string) (bool, error) {
+	present := 0
+	for _, name := range []string{"go.work", "CONTEXT.md"} {
+		info, err := os.Stat(filepath.Join(parent, name))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if info.Mode().IsRegular() {
+			present++
+		}
+	}
+	return present > 0, nil
+}
+func TestJSONFixtureParentAbsenceContract(t *testing.T) {
+	root := sourcefixture.Get(t, "project-output")
+	present, err := jsonIntegratedFixtureParent(root)
+	if err != nil || present {
+		t.Fatal("absent parent misclassified", present, err)
+	}
+	for _, name := range []string{"go.work", "CONTEXT.md"} {
+		if err = os.WriteFile(filepath.Join(root, name), []byte("parent marker"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// No fixture directory exists; parent presence must prevent the standalone skip.
+	present, err = jsonIntegratedFixtureParent(root)
+	if err != nil || !present {
+		t.Fatal("missing integrated fixture became standalone", present, err)
+	}
+	if _, err = os.Stat(filepath.Join(root, "go/internal/evidence/testdata/json-values")); !os.IsNotExist(err) {
+		t.Fatal("test unexpectedly has fixture", err)
 	}
 }

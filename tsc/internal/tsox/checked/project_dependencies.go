@@ -63,8 +63,12 @@ func ReadProjectWithOptions(configPath, entry string, options ProjectOptions) (*
 	if err != nil {
 		return fail(err)
 	}
+	syntax, err := captureSourceProgramSyntax(loaded.Program)
+	if err != nil {
+		return fail(err)
+	}
 	return &Project{Entry: loaded.Manifest.Entry, ConfigPath: loaded.Config.ConfigName(), sources: sources,
-		config: loaded.Config, dependency: loaded, resolution: append(metadata, '\n')}, nil
+		config: loaded.Config, dependency: loaded, sourceSyntax: syntax, resolution: append(metadata, '\n')}, nil
 }
 
 func (p *Project) ResolutionManifest() []byte {

@@ -90,12 +90,8 @@ func (b *builder) jsonLayoutType(value *checker.Type, node *ast.Node) (graph.Typ
 				return graph.Type{}, b.fenceWithMessage(node, "closed field needs one source declaration"), true
 			}
 			declaration := property.Declarations[0]
-			if !b.ownsFile(ast.GetSourceFileOfNode(declaration)) || declaration.Kind != ast.KindPropertySignature {
-				return graph.Type{}, b.fenceWithMessage(declaration, "closed layout fields require source property signatures"), true
-			}
-			member := declaration.AsPropertySignatureDeclaration()
-			if member.Name() == nil || member.Name().Kind != ast.KindIdentifier || member.Initializer != nil || member.Type == nil {
-				return graph.Type{}, b.fence(declaration), true
+			if fence := b.jsonLayoutProperty(declaration); fence != nil {
+				return graph.Type{}, fence, true
 			}
 			actual := b.checker.GetTypeOfPropertyOfType(value, property.Name)
 			typ, fence := b.graphType(actual, declaration)
@@ -143,7 +139,15 @@ func matchesJSONLiteral(value *graph.Expression, literal *graph.Literal) bool {
 	return false
 }
 
-func (b *builder) jsonObjectLiteral(node *ast.Node, typ graph.Type) (*graph.Expression, *fenceError) {
+func (b *builder) jsonObjectLiteral(node *ast.Node, typ graph.Type) (value *graph.Expression, failure *fenceError) {
+	if b.sourceBodies != nil {
+		defer func() {
+			if failure == nil && value != nil {
+				b.sourceBodies.Expressions[value] = b.sourceBodyNode(node)
+			}
+		}()
+	}
+
 	shape, ok := b.shapeByID(typ.Shape)
 	if !ok {
 		return nil, b.fenceWithMessage(node, "closed literal layout was not registered")

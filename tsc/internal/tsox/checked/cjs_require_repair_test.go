@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	sourcefixture "github.com/microsoft/typescript-go/tsox/testfixture"
 )
 
 // The .cjs fixture is an actual runtime implementation root under infer-js.
@@ -64,7 +66,7 @@ func TestCJSRequireWrapperIdentityNode(t *testing.T) {
 		})
 	}
 	data, _ := json.MarshalIndent(records, "", "  ")
-	if err := os.WriteFile(filepath.Join(os.Getenv("TSOX_PACKAGE_IMPLEMENTATION"), "wrapper-node-report.json"), data, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(sourcefixture.Get(t, "package-output"), "wrapper-node-report.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
 }

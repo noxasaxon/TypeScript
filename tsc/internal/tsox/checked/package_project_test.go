@@ -14,6 +14,7 @@ import (
 	"github.com/microsoft/typescript-go/internal/core"
 	"github.com/microsoft/typescript-go/internal/parser"
 	"github.com/microsoft/typescript-go/internal/vfs/osvfs"
+	sourcefixture "github.com/microsoft/typescript-go/tsox/testfixture"
 )
 
 func nodeModuleIdentity(t *testing.T, importer, specifier string) (string, string) {
@@ -35,7 +36,7 @@ func nodeModuleIdentity(t *testing.T, importer, specifier string) (string, strin
 }
 
 func TestPackagePrototypeFourEntryProject(t *testing.T) {
-	portfolio := os.Getenv("TSOX_PACKAGE_PORTFOLIO")
+	portfolio := sourcefixture.Get(t, "portfolio")
 	if portfolio == "" {
 		t.Fatal("explicit frozen project required")
 	}
@@ -91,7 +92,7 @@ func TestPackagePrototypeFourEntryProject(t *testing.T) {
 		})
 	}
 	data, _ := json.MarshalIndent(results, "", "  ")
-	if err := os.WriteFile(filepath.Join(os.Getenv("TSOX_PACKAGE_IMPLEMENTATION"), "four-entry-report.json"), data, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(sourcefixture.Get(t, "package-output"), "four-entry-report.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
 }

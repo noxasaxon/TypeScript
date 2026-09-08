@@ -29,6 +29,10 @@ func asyncNeedsFlow(ss []*graph.Statement) bool {
 }
 
 func buildAsyncFlow(body []*graph.Statement, stages []graph.AsyncStage) *graph.AsyncFlow {
+	return buildAsyncFlowMode(body, stages, false)
+}
+
+func buildAsyncFlowMode(body []*graph.Statement, stages []graph.AsyncStage, allBranches bool) *graph.AsyncFlow {
 	flow := &graph.AsyncFlow{Body: body}
 	region, phase := 0, graph.AsyncRegionBody
 	operations := map[graph.BindingID]int{}
@@ -102,13 +106,13 @@ func buildAsyncFlow(body []*graph.Statement, stages []graph.AsyncStage) *graph.A
 				successor := block(ss[i+1:], next)
 				return add(graph.AsyncBlock{Before: before, Await: operations[s.Binding], Next: successor, Then: -1, Else: -1})
 			}
-			if s.Kind == graph.StatementIf && (asyncNeedsFlow(s.Then) || asyncNeedsFlow(s.Else)) {
+			if s.Kind == graph.StatementIf && (allBranches || asyncNeedsFlow(s.Then) || asyncNeedsFlow(s.Else)) {
 				successor := block(ss[i+1:], next)
 				left, right := block(s.Then, successor), block(s.Else, successor)
 				return add(graph.AsyncBlock{Before: before, Await: -1, Condition: s.Condition, Next: -1, Then: left, Else: right})
 			}
 			before = append(before, s)
-			if s.Kind == graph.StatementReturn || s.Kind == graph.StatementThrow {
+			if s.Kind == graph.StatementReturn || s.Kind == graph.StatementReturnPromise || s.Kind == graph.StatementUnresolvedReturn || s.Kind == graph.StatementThrow {
 				next = -1
 				break
 			}

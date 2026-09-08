@@ -1,4 +1,5 @@
 {
+  "SourceRecovery": null,
   "SourcePath": "properties.ts",
   "Shapes": null,
   "Statements": [
@@ -107,6 +108,7 @@
           "Value": null,
           "Arguments": null,
           "Condition": {
+            "Pending": null,
             "Platform": null,
             "Kind": "binary",
             "Position": {
@@ -129,6 +131,7 @@
             "Boolean": false,
             "UnwrapOptional": false,
             "NonNullAssertion": false,
+            "OptionalLink": null,
             "OptionalChain": false,
             "ChainResultOptional": false,
             "ChainResultAsserted": false,
@@ -136,6 +139,7 @@
             "Operator": "||",
             "Prefix": false,
             "Left": {
+              "Pending": null,
               "Platform": null,
               "Kind": "binary",
               "Position": {
@@ -158,6 +162,7 @@
               "Boolean": false,
               "UnwrapOptional": false,
               "NonNullAssertion": false,
+              "OptionalLink": null,
               "OptionalChain": false,
               "ChainResultOptional": false,
               "ChainResultAsserted": false,
@@ -165,6 +170,7 @@
               "Operator": "||",
               "Prefix": false,
               "Left": {
+                "Pending": null,
                 "Platform": null,
                 "Kind": "binary",
                 "Position": {
@@ -187,6 +193,7 @@
                 "Boolean": false,
                 "UnwrapOptional": false,
                 "NonNullAssertion": false,
+                "OptionalLink": null,
                 "OptionalChain": false,
                 "ChainResultOptional": false,
                 "ChainResultAsserted": false,
@@ -194,6 +201,7 @@
                 "Operator": "!==",
                 "Prefix": false,
                 "Left": {
+                  "Pending": null,
                   "Platform": null,
                   "Kind": "typeof",
                   "Position": {
@@ -216,6 +224,7 @@
                   "Boolean": false,
                   "UnwrapOptional": false,
                   "NonNullAssertion": false,
+                  "OptionalLink": null,
                   "OptionalChain": false,
                   "ChainResultOptional": false,
                   "ChainResultAsserted": false,
@@ -225,6 +234,7 @@
                   "Left": null,
                   "Right": null,
                   "Operand": {
+                    "Pending": null,
                     "Platform": null,
                     "Kind": "identifier",
                     "Position": {
@@ -247,6 +257,7 @@
                     "Boolean": false,
                     "UnwrapOptional": false,
                     "NonNullAssertion": false,
+                    "OptionalLink": null,
                     "OptionalChain": false,
                     "ChainResultOptional": false,
                     "ChainResultAsserted": false,
@@ -293,6 +304,7 @@
                   "Properties": null
                 },
                 "Right": {
+                  "Pending": null,
                   "Platform": null,
                   "Kind": "string",
                   "Position": {
@@ -315,6 +327,7 @@
                   "Boolean": false,
                   "UnwrapOptional": false,
                   "NonNullAssertion": false,
+                  "OptionalLink": null,
                   "OptionalChain": false,
                   "ChainResultOptional": false,
                   "ChainResultAsserted": false,
@@ -362,6 +375,7 @@
                 "Properties": null
               },
               "Right": {
+                "Pending": null,
                 "Platform": null,
                 "Kind": "binary",
                 "Position": {
@@ -384,6 +398,7 @@
                 "Boolean": false,
                 "UnwrapOptional": false,
                 "NonNullAssertion": false,
+                "OptionalLink": null,
                 "OptionalChain": false,
                 "ChainResultOptional": false,
                 "ChainResultAsserted": false,
@@ -391,6 +406,7 @@
                 "Operator": "===",
                 "Prefix": false,
                 "Left": {
+                  "Pending": null,
                   "Platform": null,
                   "Kind": "identifier",
                   "Position": {
@@ -413,6 +429,7 @@
                   "Boolean": false,
                   "UnwrapOptional": false,
                   "NonNullAssertion": false,
+                  "OptionalLink": null,
                   "OptionalChain": false,
                   "ChainResultOptional": false,
                   "ChainResultAsserted": false,
@@ -441,6 +458,7 @@
                   "Properties": null
                 },
                 "Right": {
+                  "Pending": null,
                   "Platform": null,
                   "Kind": "null",
                   "Position": {
@@ -463,6 +481,7 @@
                   "Boolean": false,
                   "UnwrapOptional": false,
                   "NonNullAssertion": false,
+                  "OptionalLink": null,
                   "OptionalChain": false,
                   "ChainResultOptional": false,
                   "ChainResultAsserted": false,
@@ -529,6 +548,7 @@
               "Properties": null
             },
             "Right": {
+              "Pending": null,
               "Platform": null,
               "Kind": "unary",
               "Position": {
@@ -551,6 +571,7 @@
               "Boolean": false,
               "UnwrapOptional": false,
               "NonNullAssertion": false,
+              "OptionalLink": null,
               "OptionalChain": false,
               "ChainResultOptional": false,
               "ChainResultAsserted": false,
@@ -560,6 +581,7 @@
               "Left": null,
               "Right": null,
               "Operand": {
+                "Pending": null,
                 "Platform": null,
                 "Kind": "has-property",
                 "Position": {
@@ -582,6 +604,7 @@
                 "Boolean": false,
                 "UnwrapOptional": false,
                 "NonNullAssertion": false,
+                "OptionalLink": null,
                 "OptionalChain": false,
                 "ChainResultOptional": false,
                 "ChainResultAsserted": false,
@@ -606,6 +629,7 @@
                 },
                 "Body": null,
                 "Receiver": {
+                  "Pending": null,
                   "Platform": null,
                   "Kind": "identifier",
                   "Position": {
@@ -628,6 +652,7 @@
                   "Boolean": false,
                   "UnwrapOptional": false,
                   "NonNullAssertion": false,
+                  "OptionalLink": null,
                   "OptionalChain": false,
                   "ChainResultOptional": false,
                   "ChainResultAsserted": false,
@@ -656,6 +681,7 @@
                   "Properties": null
                 },
                 "Index": {
+                  "Pending": null,
                   "Platform": null,
                   "Kind": "string",
                   "Position": {
@@ -678,6 +704,7 @@
                   "Boolean": false,
                   "UnwrapOptional": false,
                   "NonNullAssertion": false,
+                  "OptionalLink": null,
                   "OptionalChain": false,
                   "ChainResultOptional": false,
                   "ChainResultAsserted": false,
@@ -777,6 +804,7 @@
                 "Element": null
               },
               "Value": {
+                "Pending": null,
                 "Platform": null,
                 "Kind": "string",
                 "Position": {
@@ -799,6 +827,7 @@
                 "Boolean": false,
                 "UnwrapOptional": false,
                 "NonNullAssertion": false,
+                "OptionalLink": null,
                 "OptionalChain": false,
                 "ChainResultOptional": false,
                 "ChainResultAsserted": false,
@@ -868,6 +897,7 @@
             "Element": null
           },
           "Value": {
+            "Pending": null,
             "Platform": null,
             "Kind": "unknown-property",
             "Position": {
@@ -890,6 +920,7 @@
             "Boolean": false,
             "UnwrapOptional": false,
             "NonNullAssertion": false,
+            "OptionalLink": null,
             "OptionalChain": false,
             "ChainResultOptional": false,
             "ChainResultAsserted": false,
@@ -914,6 +945,7 @@
             },
             "Body": null,
             "Receiver": {
+              "Pending": null,
               "Platform": null,
               "Kind": "identifier",
               "Position": {
@@ -936,6 +968,7 @@
               "Boolean": false,
               "UnwrapOptional": false,
               "NonNullAssertion": false,
+              "OptionalLink": null,
               "OptionalChain": false,
               "ChainResultOptional": false,
               "ChainResultAsserted": false,
@@ -964,6 +997,7 @@
               "Properties": null
             },
             "Index": {
+              "Pending": null,
               "Platform": null,
               "Kind": "string",
               "Position": {
@@ -986,6 +1020,7 @@
               "Boolean": false,
               "UnwrapOptional": false,
               "NonNullAssertion": false,
+              "OptionalLink": null,
               "OptionalChain": false,
               "ChainResultOptional": false,
               "ChainResultAsserted": false,
@@ -1053,6 +1088,7 @@
             "Element": null
           },
           "Value": {
+            "Pending": null,
             "Platform": null,
             "Kind": "template",
             "Position": {
@@ -1075,6 +1111,7 @@
             "Boolean": false,
             "UnwrapOptional": false,
             "NonNullAssertion": false,
+            "OptionalLink": null,
             "OptionalChain": false,
             "ChainResultOptional": false,
             "ChainResultAsserted": false,
@@ -1093,6 +1130,7 @@
             ],
             "Expressions": [
               {
+                "Pending": null,
                 "Platform": null,
                 "Kind": "number-is-finite",
                 "Position": {
@@ -1115,6 +1153,7 @@
                 "Boolean": false,
                 "UnwrapOptional": false,
                 "NonNullAssertion": false,
+                "OptionalLink": null,
                 "OptionalChain": false,
                 "ChainResultOptional": false,
                 "ChainResultAsserted": false,
@@ -1127,6 +1166,7 @@
                 "Callee": null,
                 "Arguments": [
                   {
+                    "Pending": null,
                     "Platform": null,
                     "Kind": "identifier",
                     "Position": {
@@ -1149,6 +1189,7 @@
                     "Boolean": false,
                     "UnwrapOptional": false,
                     "NonNullAssertion": false,
+                    "OptionalLink": null,
                     "OptionalChain": false,
                     "ChainResultOptional": false,
                     "ChainResultAsserted": false,
@@ -1194,6 +1235,7 @@
                 "Properties": null
               },
               {
+                "Pending": null,
                 "Platform": null,
                 "Kind": "number-is-integer",
                 "Position": {
@@ -1216,6 +1258,7 @@
                 "Boolean": false,
                 "UnwrapOptional": false,
                 "NonNullAssertion": false,
+                "OptionalLink": null,
                 "OptionalChain": false,
                 "ChainResultOptional": false,
                 "ChainResultAsserted": false,
@@ -1228,6 +1271,7 @@
                 "Callee": null,
                 "Arguments": [
                   {
+                    "Pending": null,
                     "Platform": null,
                     "Kind": "identifier",
                     "Position": {
@@ -1250,6 +1294,7 @@
                     "Boolean": false,
                     "UnwrapOptional": false,
                     "NonNullAssertion": false,
+                    "OptionalLink": null,
                     "OptionalChain": false,
                     "ChainResultOptional": false,
                     "ChainResultAsserted": false,

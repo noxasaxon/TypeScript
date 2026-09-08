@@ -16,11 +16,12 @@ import (
 	"github.com/microsoft/typescript-go/internal/tsoptions"
 	"github.com/microsoft/typescript-go/internal/vfs/osvfs"
 	"github.com/microsoft/typescript-go/tsox/graph"
+	sourcefixture "github.com/microsoft/typescript-go/tsox/testfixture"
 )
 
 func packagePrototypeDir(t *testing.T) string {
 	t.Helper()
-	base := os.Getenv("TSOX_PACKAGE_IMPLEMENTATION")
+	base := sourcefixture.Get(t, "package-output")
 	if base == "" {
 		t.Fatal("explicit scratch artifact directory required")
 	}
@@ -215,7 +216,7 @@ func TestPackagePrototypeRuntimeNode(t *testing.T) {
 	}
 }
 func TestPackagePrototypeFrozenChecker(t *testing.T) {
-	dir := os.Getenv("TSOX_PACKAGE_PORTFOLIO")
+	dir := sourcefixture.Get(t, "portfolio")
 	if dir == "" {
 		t.Fatal("explicit frozen installed portfolio required")
 	}
@@ -262,7 +263,7 @@ func TestPackagePrototypeFrozenChecker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(filepath.Join(os.Getenv("TSOX_PACKAGE_IMPLEMENTATION"), "frozen-snapshot.json"), snapshotBytes, 0600); err != nil {
+	if err = os.WriteFile(filepath.Join(sourcefixture.Get(t, "package-output"), "frozen-snapshot.json"), snapshotBytes, 0600); err != nil {
 		t.Fatal(err)
 	}
 	runtimeHashes := map[string]string{}
@@ -278,7 +279,7 @@ func TestPackagePrototypeFrozenChecker(t *testing.T) {
 	}
 	report := map[string]any{"runtimeHashes": runtimeHashes, "snapshotSHA256": fmt.Sprintf("%x", sha256.Sum256(snapshotBytes)), "policy": result.Policy, "runtime": runtime, "checkerEdges": result.Edges, "snapshotObservations": len(snap.Observations), "passes": result.Passes, "semanticDiagnostics": len(result.Program.GetSemanticDiagnostics(context.Background(), nil)), "standardLibraryFingerprint": StandardLibraryFingerprint()}
 	data, _ := json.MarshalIndent(report, "", "  ")
-	if err = os.WriteFile(filepath.Join(os.Getenv("TSOX_PACKAGE_IMPLEMENTATION"), "frozen-report.json"), data, 0600); err != nil {
+	if err = os.WriteFile(filepath.Join(sourcefixture.Get(t, "package-output"), "frozen-report.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
 }

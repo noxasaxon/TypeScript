@@ -7,9 +7,11 @@ import "fmt"
 
 // Program is the checked subset program consumed by the Rust emitter.
 type Program struct {
-	SourcePath string
-	Shapes     []Shape
-	Statements []*Statement
+	sourceOnly     bool
+	SourceRecovery *SourceRecoveryStamp
+	SourcePath     string
+	Shapes         []Shape
+	Statements     []*Statement
 	// EntryExports maps runtime names exposed by the entry module to their
 	// original lexical bindings. Re-exports introduce no alias storage.
 	EntryExports []Export
@@ -120,6 +122,7 @@ const (
 // Statement stores only fields used by its Kind. Blocks are normalized into
 // statement slices on their owning control-flow node.
 type Statement struct {
+	sourceOnly bool
 	// Producer is the resolved standard operation on an async-await projection.
 	Producer *AsyncProducer
 	// Protected retains lexical exception regions in the shared body graph.
@@ -182,13 +185,15 @@ type PropertyValue struct {
 // Expression stores only fields used by its Kind. Chunks has exactly one more
 // entry than Expressions for a template expression.
 type Expression struct {
-	Platform *PlatformValue
-	Kind     ExpressionKind
-	Position Position
-	Binding  BindingID
-	Type     Type
-	Number   float64
-	String   string
+	sourceOnly bool
+	Pending    *SourcePending
+	Platform   *PlatformValue
+	Kind       ExpressionKind
+	Position   Position
+	Binding    BindingID
+	Type       Type
+	Number     float64
+	String     string
 	// StringUnits is non-nil only for a code-unit-preserving literal. String
 	// then stays empty; consumers must not decode units with replacement.
 	StringUnits []uint16
@@ -201,6 +206,7 @@ type Expression struct {
 	// OptionalChain marks every access/method link in an optional chain.
 	// ChainResultOptional is the direct link's optionality before the chain
 	// contributes undefined through short-circuiting.
+	OptionalLink        *OptionalLink
 	OptionalChain       bool
 	ChainResultOptional bool
 	// ChainResultAsserted checks only the direct link after an optional

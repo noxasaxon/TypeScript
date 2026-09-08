@@ -24,12 +24,13 @@ import (
 // fingerprints cover every loaded user input. Bundled standard libraries are
 // versioned with the compiler. Fields are read-only after ReadProject returns.
 type Project struct {
-	Entry      string
-	ConfigPath string
-	sources    map[string]string
-	config     *tsoptions.ParsedCommandLine
-	dependency *dependencyProject
-	resolution []byte
+	sourceSyntax *sourceSyntaxSeal
+	Entry        string
+	ConfigPath   string
+	sources      map[string]string
+	config       *tsoptions.ParsedCommandLine
+	dependency   *dependencyProject
+	resolution   []byte
 }
 
 type configHost struct {

@@ -10,6 +10,15 @@ func (b *builder) asyncBody(nodes []*ast.Node, a *graph.AsyncProgram, hostSymbol
 	extractBody = func(nodes []*ast.Node) ([]*graph.Statement, *fenceError) {
 		var before []*graph.Statement
 		for _, n := range nodes {
+			if b.middleware != nil {
+				if ss, f, handled := b.middleware.statement(n); handled {
+					if f != nil {
+						return nil, f
+					}
+					before = append(before, ss...)
+					continue
+				}
+			}
 			if n.Kind == ast.KindExpressionStatement && n.AsExpressionStatement().Expression.Kind == ast.KindAwaitExpression {
 				awaited := n.AsExpressionStatement().Expression.AsAwaitExpression().Expression
 				if producer, fulfilled, f, handled := b.standardProducer(awaited); handled {

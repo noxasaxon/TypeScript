@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	sourcefixture "github.com/microsoft/typescript-go/tsox/testfixture"
 )
 
 func TestPublicDependencyProjectFrozenInventory(t *testing.T) {
-	portfolio := os.Getenv("TSOX_PACKAGE_PORTFOLIO")
+	portfolio := sourcefixture.Get(t, "portfolio")
 	if portfolio == "" {
 		t.Fatal("explicit unchanged frozen portfolio required")
 	}

@@ -1,4 +1,5 @@
 {
+  "SourceRecovery": null,
   "SourcePath": "unchecked.ts",
   "Shapes": null,
   "Statements": [
@@ -105,6 +106,7 @@
             "Element": null
           },
           "Value": {
+            "Pending": null,
             "Platform": null,
             "Kind": "unknown-projection",
             "Position": {
@@ -127,6 +129,7 @@
             "Boolean": false,
             "UnwrapOptional": false,
             "NonNullAssertion": false,
+            "OptionalLink": null,
             "OptionalChain": false,
             "ChainResultOptional": false,
             "ChainResultAsserted": false,
@@ -136,6 +139,7 @@
             "Left": null,
             "Right": null,
             "Operand": {
+              "Pending": null,
               "Platform": null,
               "Kind": "json-parse",
               "Position": {
@@ -158,6 +162,7 @@
               "Boolean": false,
               "UnwrapOptional": false,
               "NonNullAssertion": false,
+              "OptionalLink": null,
               "OptionalChain": false,
               "ChainResultOptional": false,
               "ChainResultAsserted": false,
@@ -167,6 +172,7 @@
               "Left": null,
               "Right": null,
               "Operand": {
+                "Pending": null,
                 "Platform": null,
                 "Kind": "string",
                 "Position": {
@@ -189,6 +195,7 @@
                 "Boolean": false,
                 "UnwrapOptional": false,
                 "NonNullAssertion": false,
+                "OptionalLink": null,
                 "OptionalChain": false,
                 "ChainResultOptional": false,
                 "ChainResultAsserted": false,
@@ -290,6 +297,7 @@
             "Element": null
           },
           "Value": {
+            "Pending": null,
             "Platform": null,
             "Kind": "number-convert",
             "Position": {
@@ -312,6 +320,7 @@
             "Boolean": false,
             "UnwrapOptional": false,
             "NonNullAssertion": false,
+            "OptionalLink": null,
             "OptionalChain": false,
             "ChainResultOptional": false,
             "ChainResultAsserted": false,
@@ -324,6 +333,7 @@
             "Callee": null,
             "Arguments": [
               {
+                "Pending": null,
                 "Platform": null,
                 "Kind": "identifier",
                 "Position": {
@@ -346,6 +356,7 @@
                 "Boolean": false,
                 "UnwrapOptional": false,
                 "NonNullAssertion": false,
+                "OptionalLink": null,
                 "OptionalChain": false,
                 "ChainResultOptional": false,
                 "ChainResultAsserted": false,
