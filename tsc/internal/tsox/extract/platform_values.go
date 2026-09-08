@@ -72,14 +72,16 @@ func (b *builder) platformValueExpression(node *ast.Node) (*graph.Expression, *f
 			if fence != nil {
 				return nil, fence, true
 			}
-			right, fence := b.expressionForSlot(data.Right, graph.Type{Kind: graph.TypeString})
+			valueType := graph.Type{Kind: graph.TypeString, Optional: checkerTypeIncludesUndefined(b.checker.GetTypeAtLocation(node))}
+			right, fence := b.expressionForSlot(data.Right, valueType)
 			if fence != nil {
 				return nil, fence, true
 			}
-			if left.Type.Kind != graph.TypeNullableString || right.Type.Kind != graph.TypeString || right.Type.Optional {
+			if left.Type.Kind != graph.TypeNullableString || !slotAccepts(valueType, right) {
 				return nil, b.fenceDiagnostic(node, "NullableString", "nullable string coalescing requires a string fallback"), true
 			}
-			return &graph.Expression{Kind: graph.ExpressionNullish, Position: b.position(node), Type: graph.Type{Kind: graph.TypeString}, Left: left, Right: right}, nil, true
+			adaptUndefinedToSlot(valueType, right)
+			return &graph.Expression{Kind: graph.ExpressionNullish, Position: b.position(node), Type: valueType, Left: left, Right: right}, nil, true
 		}
 	}
 	if node.Kind == ast.KindCallExpression {
