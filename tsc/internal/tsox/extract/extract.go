@@ -320,7 +320,7 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 		if fence != nil {
 			return nil, fence
 		}
-		if value.Type.Kind != graph.TypeString || value.Type.Optional {
+		if (value.Type.Kind != graph.TypeString && value.Type.Kind != graph.TypeError && value.Type.Kind != graph.TypeThrown) || value.Type.Optional {
 			return nil, b.fenceDiagnostic(node, "AsyncThrow", "async host supports string throws only")
 		}
 		return []*graph.Statement{{Kind: graph.StatementThrow, Position: b.position(node), Value: value}}, nil
@@ -421,7 +421,7 @@ func (b *builder) variableDeclarations(node *ast.Node) ([]*graph.Statement, *fen
 		} else {
 			value, fence = b.expression(declaration.Initializer)
 			if fence == nil {
-				if b.jsonValues && value.Type.Kind == graph.TypeUnknown {
+				if value.Type.Kind == graph.TypeError || value.Type.Kind == graph.TypeThrown || (b.jsonValues && value.Type.Kind == graph.TypeUnknown) {
 					valueType = value.Type
 				} else {
 					valueType, fence = b.checkedType(nameNode)
@@ -585,6 +585,9 @@ func (b *builder) parameters(nodes []*ast.Node) ([]graph.Parameter, *fenceError)
 }
 
 func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
+	if value, fence, handled := b.errorExpression(node); handled {
+		return value, fence
+	}
 	if value, fence, handled := b.numericExpression(node); handled {
 		return value, fence
 	}

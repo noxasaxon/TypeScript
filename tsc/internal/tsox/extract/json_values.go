@@ -162,6 +162,10 @@ func (b *builder) jsonValueExpression(node *ast.Node) (*graph.Expression, *fence
 
 // The ordinary extractor evaluates receivers once before this domain hook.
 func (b *builder) jsonValueProperty(node *ast.Node, receiver *graph.Expression) (*graph.Expression, *fenceError, bool) {
+	if receiver.Type.Kind == graph.TypeClosedUnion {
+		value, fence := b.closedValueProperty(node, receiver)
+		return value, fence, true
+	}
 	unknown := graph.Type{Kind: graph.TypeUnknown}
 	stringType := graph.Type{Kind: graph.TypeString}
 	data := node.AsPropertyAccessExpression()

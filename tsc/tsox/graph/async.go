@@ -3,15 +3,16 @@ package graph
 // AsyncProgram is the separately admitted sequential host entrypoint. The
 // ordinary Program cannot accidentally interpret an await as synchronous work.
 type AsyncProgram struct {
-	Module   *Program
-	Position Position
-	Input    Parameter
-	Result   Type
-	Stages   []AsyncStage
-	After    []*Statement
-	Catch    []*Statement
-	HasCatch bool
-	Finally  []*Statement
+	Module       *Program
+	Position     Position
+	Input        Parameter
+	Result       Type
+	Stages       []AsyncStage
+	After        []*Statement
+	Catch        []*Statement
+	CatchBinding *Parameter
+	HasCatch     bool
+	Finally      []*Statement
 	// Flow represents conditional joins and cyclic loop edges around suspension.
 	// Stages/After retain the original sequential API when Flow is nil.
 	Flow *AsyncFlow

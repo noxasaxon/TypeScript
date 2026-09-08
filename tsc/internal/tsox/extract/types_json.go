@@ -198,6 +198,9 @@ func (b *builder) jsonObjectLiteral(node *ast.Node, typ graph.Type) (*graph.Expr
 		if name == nil || name.Kind != ast.KindIdentifier {
 			return nil, b.fence(property)
 		}
+		if name.Text() == "__proto__" {
+			return nil, b.fenceWithMessage(property, "closed construction requires explicit prototype versus data-property semantics")
+		}
 		field, ok := fields[name.Text()]
 		if !ok || seen[field.Name] {
 			return nil, b.fenceWithMessage(property, "closed construction has an unknown or duplicate field")

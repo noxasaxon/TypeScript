@@ -160,7 +160,10 @@ func ExtractAsyncChecked(entry string, p *checked.Program, entryName, hostName s
 		if tr.CatchClause != nil {
 			ca := tr.CatchClause.AsCatchClause()
 			if ca.VariableDeclaration != nil {
-				return fail(b.fenceDiagnostic(ca.VariableDeclaration, "AsyncCatch", "catch bindings are outside the string-rejection host boundary; use catch without binding"))
+				a.CatchBinding, f = b.errorCatchBinding(ca.VariableDeclaration)
+				if f != nil {
+					return fail(f)
+				}
 			}
 			a.HasCatch = true
 			a.Catch, f = b.statements(ca.Block.AsBlock().Statements.Nodes, false)
@@ -213,7 +216,10 @@ func ExtractAsyncChecked(entry string, p *checked.Program, entryName, hostName s
 			if tr.CatchClause != nil {
 				ca := tr.CatchClause.AsCatchClause()
 				if ca.VariableDeclaration != nil {
-					return fail(b.fenceDiagnostic(ca.VariableDeclaration, "AsyncCatch", "async helper catch bindings are unsupported"))
+					helper.Program.CatchBinding, f = b.errorCatchBinding(ca.VariableDeclaration)
+					if f != nil {
+						return fail(f)
+					}
 				}
 				helper.Program.HasCatch = true
 				helper.Program.Catch, f = b.statements(ca.Block.AsBlock().Statements.Nodes, false)
