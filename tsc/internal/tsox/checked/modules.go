@@ -152,6 +152,12 @@ func newProgram(entry string, sources map[string]string, configured *tsoptions.P
 			return nil, projectDiagnostics(config.ConfigName(), ds)
 		}
 	}
+	return runtimeProgram(program, entry, labels)
+}
+
+// runtimeProgram preserves the actual checker domain while selecting executable modules.
+func runtimeProgram(program *compiler.Program, entry string, labels map[string]string) (*Program, []graph.Diagnostic) {
+	entryKey := Normalize(entry)
 	result := &Program{Compiler: program, Entry: program.GetSourceFile(entryKey), Files: make(map[*ast.SourceFile]string)}
 	if result.Entry == nil {
 		return nil, []graph.Diagnostic{sourceError(entry, fmt.Errorf("TypeScript program did not load entry source"))}

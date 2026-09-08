@@ -586,6 +586,9 @@ func (b *builder) parameters(nodes []*ast.Node) ([]graph.Parameter, *fenceError)
 }
 
 func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
+	if node.Kind == ast.KindConditionalExpression {
+		return b.conditionalExpression(node)
+	}
 	if value, fence, handled := b.errorExpression(node); handled {
 		return value, fence
 	}
@@ -887,7 +890,13 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		}
 		arguments := make([]*graph.Expression, 0, len(data.Arguments.Nodes))
 		for index, argumentNode := range data.Arguments.Nodes {
-			argument, fence := b.expression(argumentNode)
+			var argument *graph.Expression
+			var fence *fenceError
+			if index < len(callee.Type.Parameters) {
+				argument, fence = b.expressionForSlot(argumentNode, callee.Type.Parameters[index])
+			} else {
+				argument, fence = b.expression(argumentNode)
+			}
 			if fence != nil {
 				return nil, fence
 			}

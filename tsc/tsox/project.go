@@ -65,3 +65,28 @@ func (p *Project) SourceFiles() map[string]string {
 	}
 	return p.snapshot.SourceFiles()
 }
+
+// ProjectOptions makes dependency typing an explicit build input.
+type ProjectOptions = checked.ProjectOptions
+type DependencyTypes = checked.DependencyTypes
+
+const (
+	DependencyTypesConfig  = checked.DependencyTypesConfig
+	DependencyTypesInferJS = checked.DependencyTypesInferJS
+)
+
+func ReadProjectWithOptions(configPath, entry string, options ProjectOptions) (*Project, []graph.Diagnostic) {
+	p, ds := checked.ReadProjectWithOptions(configPath, entry, options)
+	if len(ds) != 0 {
+		return nil, ds
+	}
+	return &Project{Entry: p.Entry, ConfigPath: p.ConfigPath, snapshot: p}, nil
+}
+
+// ResolutionManifest returns immutable resolution/policy identity as a defensive copy.
+func (p *Project) ResolutionManifest() []byte {
+	if p == nil {
+		return nil
+	}
+	return p.snapshot.ResolutionManifest()
+}

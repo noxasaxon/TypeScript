@@ -28,6 +28,8 @@ type Project struct {
 	ConfigPath string
 	sources    map[string]string
 	config     *tsoptions.ParsedCommandLine
+	dependency *dependencyProject
+	resolution []byte
 }
 
 type configHost struct {
@@ -154,6 +156,9 @@ func ReadProject(configPath, entry string) (*Project, []graph.Diagnostic) {
 func (p *Project) Check() (*Program, []graph.Diagnostic) {
 	if p == nil || p.config == nil {
 		return nil, []graph.Diagnostic{projectError("", "ProjectSource", "project must be created by ReadProject")}
+	}
+	if p.dependency != nil {
+		return p.checkDependencyProject()
 	}
 	program, ds := newProgram(p.Entry, p.sources, p.config)
 	if len(ds) != 0 {
