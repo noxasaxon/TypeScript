@@ -18,9 +18,14 @@ func ExtractFiles(entry string, sources map[string]string) graph.Result {
 
 // ExtractChecked extracts a checked immutable project in its original checker domain.
 func ExtractChecked(entry string, program *checked.Program) graph.Result {
+	return extractChecked(entry, program, false)
+}
+
+// The staged JSON layout mode remains internal until consumers are complete.
+func extractChecked(entry string, program *checked.Program, jsonValues bool) graph.Result {
 	typeChecker, done := program.Compiler.GetTypeChecker(context.Background())
 	defer done()
-	b := &builder{sourcePath: entry, file: program.Entry, checker: typeChecker,
+	b := &builder{jsonValues: jsonValues, sourcePath: entry, file: program.Entry, checker: typeChecker,
 		bindings: make(map[*ast.Symbol]graph.BindingID), bindingTypes: make(map[graph.BindingID]graph.Type), nextBinding: 1,
 		shapeIDs: make(map[*ast.Symbol]graph.ShapeID), shapeBuilding: make(map[*ast.Symbol]bool), moduleFiles: program.Files, entryFile: program.Entry}
 	var statements []*graph.Statement
@@ -97,6 +102,9 @@ func (b *builder) entryExports() []graph.Export {
 
 func (b *builder) sourceSymbol(node *ast.Node) *ast.Symbol {
 	symbol := b.checker.GetSymbolAtLocation(node)
+	if node.Parent != nil && node.Parent.Kind == ast.KindShorthandPropertyAssignment && node.Parent.Name() == node {
+		symbol = b.checker.GetShorthandAssignmentValueSymbol(node.Parent)
+	}
 	if b.moduleFiles != nil && symbol != nil && symbol.Flags&ast.SymbolFlagsAlias != 0 {
 		return b.checker.GetAliasedSymbol(symbol)
 	}

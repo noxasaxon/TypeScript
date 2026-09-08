@@ -12,7 +12,7 @@ type AsyncProgram struct {
 	Catch    []*Statement
 	HasCatch bool
 	Finally  []*Statement
-	// Flow is present when an await lies inside an acyclic conditional.
+	// Flow represents conditional joins and cyclic loop edges around suspension.
 	// Stages/After retain the original sequential API when Flow is nil.
 	Flow *AsyncFlow
 	// Helpers are checker-resolved direct awaited functions; their calls are acyclic.

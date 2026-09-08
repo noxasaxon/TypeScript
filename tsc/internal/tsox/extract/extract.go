@@ -123,21 +123,23 @@ func typescriptDiagnostic(sourcePath string, file *ast.SourceFile, diagnostic *a
 }
 
 type builder struct {
-	jsonValues    bool
-	asyncThrow    bool
-	sourcePath    string
-	file          *ast.SourceFile
-	checker       *checker.Checker
-	bindings      map[*ast.Symbol]graph.BindingID
-	bindingTypes  map[graph.BindingID]graph.Type
-	nextBinding   graph.BindingID
-	shapes        []graph.Shape
-	shapeIDs      map[*ast.Symbol]graph.ShapeID
-	shapeBuilding map[*ast.Symbol]bool
-	returnType    *graph.Type
-	literalSlot   *graph.Type
-	moduleFiles   map[*ast.SourceFile]string
-	entryFile     *ast.SourceFile
+	jsonValues        bool
+	jsonShapeIDs      map[*checker.Type]graph.ShapeID
+	jsonShapeBuilding map[*checker.Type]bool
+	asyncThrow        bool
+	sourcePath        string
+	file              *ast.SourceFile
+	checker           *checker.Checker
+	bindings          map[*ast.Symbol]graph.BindingID
+	bindingTypes      map[graph.BindingID]graph.Type
+	nextBinding       graph.BindingID
+	shapes            []graph.Shape
+	shapeIDs          map[*ast.Symbol]graph.ShapeID
+	shapeBuilding     map[*ast.Symbol]bool
+	returnType        *graph.Type
+	literalSlot       *graph.Type
+	moduleFiles       map[*ast.SourceFile]string
+	entryFile         *ast.SourceFile
 }
 
 type fenceError struct {
@@ -236,72 +238,8 @@ func (b *builder) statement(node *ast.Node, topLevel bool) ([]*graph.Statement, 
 			Else:      elseStatements,
 		}}, nil
 
-	case ast.KindWhileStatement:
-		data := node.AsWhileStatement()
-		condition, fence := b.booleanExpression(data.Expression)
-		if fence != nil {
-			return nil, fence
-		}
-		body, fence := b.statementBody(data.Statement)
-		if fence != nil {
-			return nil, fence
-		}
-		return []*graph.Statement{{
-			Kind:      graph.StatementWhile,
-			Position:  b.position(node),
-			Condition: condition,
-			Body:      body,
-		}}, nil
-
-	case ast.KindForStatement:
-		data := node.AsForStatement()
-		var init []*graph.Statement
-		var fence *fenceError
-		if data.Initializer != nil {
-			switch data.Initializer.Kind {
-			case ast.KindVariableDeclarationList:
-				init, fence = b.variableDeclarations(data.Initializer)
-			default:
-				var expression *graph.Expression
-				expression, fence = b.expression(data.Initializer)
-				if fence == nil {
-					init = []*graph.Statement{{
-						Kind:     graph.StatementExpression,
-						Position: b.position(data.Initializer),
-						Value:    expression,
-					}}
-				}
-			}
-			if fence != nil {
-				return nil, fence
-			}
-		}
-		var condition *graph.Expression
-		if data.Condition != nil {
-			condition, fence = b.booleanExpression(data.Condition)
-			if fence != nil {
-				return nil, fence
-			}
-		}
-		var increment *graph.Expression
-		if data.Incrementor != nil {
-			increment, fence = b.expression(data.Incrementor)
-			if fence != nil {
-				return nil, fence
-			}
-		}
-		body, fence := b.statementBody(data.Statement)
-		if fence != nil {
-			return nil, fence
-		}
-		return []*graph.Statement{{
-			Kind:      graph.StatementFor,
-			Position:  b.position(node),
-			Init:      init,
-			Condition: condition,
-			Increment: increment,
-			Body:      body,
-		}}, nil
+	case ast.KindWhileStatement, ast.KindForStatement:
+		return b.loopStatement(node, b.statementBody)
 
 	case ast.KindForOfStatement:
 		data := node.AsForInOrOfStatement()
@@ -647,6 +585,9 @@ func (b *builder) parameters(nodes []*ast.Node) ([]graph.Parameter, *fenceError)
 }
 
 func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
+	if value, fence, handled := b.numericExpression(node); handled {
+		return value, fence
+	}
 	if b.jsonValues {
 		if value, fence, handled := b.jsonValueExpression(node); handled {
 			return value, fence
@@ -714,6 +655,11 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		if fence := b.objectLiteralPrototypeFence(node); fence != nil {
 			return nil, fence
 		}
+		if b.jsonValues && b.literalSlot != nil && (b.literalSlot.Kind == graph.TypeObject || b.literalSlot.Kind == graph.TypeClosedUnion) {
+			valueType := *b.literalSlot
+			valueType.Optional = false
+			return b.jsonObjectLiteral(node, valueType)
+		}
 		contextualType := b.checker.GetContextualType(node, checker.ContextFlagsNone)
 		if b.literalSlot != nil && b.literalSlot.Kind == graph.TypeObject {
 			valueType := *b.literalSlot
@@ -726,6 +672,10 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		valueType, fence := b.graphType(contextualType, node)
 		if fence != nil {
 			return nil, fence
+		}
+		if b.jsonValues {
+			valueType.Optional = false
+			return b.jsonObjectLiteral(node, valueType)
 		}
 		if valueType.Kind != graph.TypeObject {
 			return nil, b.fenceWithMessage(node, "object literal requires one named shape")
@@ -1217,6 +1167,9 @@ func (b *builder) arrayMethodCall(node *ast.Node) (*graph.Expression, *fenceErro
 		if argumentFence != nil {
 			return nil, argumentFence
 		}
+		if b.jsonValues && index == 0 && (method == "push" || method == "unshift" || method == "includes" || method == "indexOf") {
+			argument = unknownProjection(argument, *receiver.Type.Element)
+		}
 		callback := graph.IsCallbackArrayMethod(method) && index == 0
 		if callback {
 			if argument.Type.Kind != graph.TypeFunction || argument.Type.Result == nil || !b.supportedCallbackArgument(argumentNode) {
@@ -1623,7 +1576,7 @@ func (b *builder) expressionType(node *ast.Node) (graph.Type, bool, *fenceError)
 }
 
 func (b *builder) optionalUseType(node *ast.Node, declaredType graph.Type) (graph.Type, bool, *fenceError) {
-	if b.jsonValues && declaredType.Kind == graph.TypeUnknown {
+	if b.jsonValues && (declaredType.Kind == graph.TypeUnknown || declaredType.Kind == graph.TypeClosedUnion) {
 		return declaredType, false, nil
 	}
 	checkerUseType := b.checker.GetTypeAtLocation(node)
@@ -1638,6 +1591,13 @@ func (b *builder) optionalUseType(node *ast.Node, declaredType graph.Type) (grap
 }
 
 func (b *builder) ensureShapeDeclaration(node *ast.Node) (graph.ShapeID, *fenceError) {
+	if b.jsonValues {
+		if node.Kind == ast.KindTypeAliasDeclaration && node.AsTypeAliasDeclaration().TypeParameters != nil {
+			return 0, nil // instantiated uses establish layouts; declarations have no storage
+		}
+		value, fence := b.graphType(b.checker.GetTypeAtLocation(node.Name()), node)
+		return value.Shape, fence
+	}
 	var name *ast.Node
 	switch node.Kind {
 	case ast.KindInterfaceDeclaration:
@@ -1783,6 +1743,11 @@ func (b *builder) validateTypeNode(node *ast.Node) *fenceError {
 
 func (b *builder) graphType(value *checker.Type, node *ast.Node) (graph.Type, *fenceError) {
 	flags := value.Flags()
+	if b.jsonValues {
+		if result, fence, handled := b.jsonLayoutType(value, node); handled {
+			return result, fence
+		}
+	}
 	if b.jsonValues && flags&checker.TypeFlagsUnknown != 0 {
 		return graph.Type{Kind: graph.TypeUnknown}, nil
 	}
@@ -1811,7 +1776,7 @@ func (b *builder) graphType(value *checker.Type, node *ast.Node) (graph.Type, *f
 				return graph.Type{}, b.fenceDiagnostic(node, "UnsupportedUnion", "unsupported union "+b.checker.TypeToString(value))
 			}
 		}
-		if !hasUndefined && inner != nil && inner.Kind == graph.TypeBoolean {
+		if !hasUndefined && inner != nil && (inner.Kind == graph.TypeBoolean || b.jsonValues && (inner.Kind == graph.TypeString || inner.Kind == graph.TypeNumber)) {
 			return *inner, nil
 		}
 		if !hasUndefined || inner == nil || inner.Kind == graph.TypeFunction || inner.Kind == graph.TypeVoid {
@@ -1899,7 +1864,7 @@ func sameType(left graph.Type, right graph.Type) bool {
 		return false
 	}
 	switch left.Kind {
-	case graph.TypeObject:
+	case graph.TypeObject, graph.TypeClosedUnion:
 		return left.Shape != 0 && left.Shape == right.Shape
 	case graph.TypeArray:
 		return left.Element != nil && right.Element != nil && sameType(*left.Element, *right.Element)

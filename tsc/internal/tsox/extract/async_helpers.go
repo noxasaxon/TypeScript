@@ -10,6 +10,19 @@ func (b *builder) asyncBody(nodes []*ast.Node, a *graph.AsyncProgram, hostSymbol
 	extractBody = func(nodes []*ast.Node) ([]*graph.Statement, *fenceError) {
 		var before []*graph.Statement
 		for _, n := range nodes {
+			if n.Kind == ast.KindForStatement || n.Kind == ast.KindWhileStatement {
+				loop, f := b.loopStatement(n, func(node *ast.Node) ([]*graph.Statement, *fenceError) {
+					if node.Kind == ast.KindBlock {
+						return extractBody(node.AsBlock().Statements.Nodes)
+					}
+					return extractBody([]*ast.Node{node})
+				})
+				if f != nil {
+					return nil, f
+				}
+				before = append(before, loop...)
+				continue
+			}
 			if n.Kind == ast.KindIfStatement {
 				branch := n.AsIfStatement()
 				condition, f := b.expression(branch.Expression)

@@ -36,9 +36,12 @@ func (b *builder) libraryMemberCall(node *ast.Node, globalName, memberName strin
 // Shape coercion is deliberately absent: checking object never establishes a
 // typed record layout, nor that copying that object would preserve its identity.
 func unknownProjection(value *graph.Expression, target graph.Type) *graph.Expression {
-	if value == nil || value.Type.Kind != graph.TypeUnknown || target.Optional {
+	if value == nil || value.Type.Kind != graph.TypeUnknown {
 		return value
 	}
+	// A checked present leaf may flow into an optional slot. This requests the
+	// nonoptional leaf proof; optional annotations still prove nothing about it.
+	target.Optional = false
 	switch target.Kind {
 	case graph.TypeString, graph.TypeNumber, graph.TypeBoolean:
 	case graph.TypeArray:

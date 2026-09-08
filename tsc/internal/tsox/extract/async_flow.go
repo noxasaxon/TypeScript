@@ -4,19 +4,28 @@ import "github.com/microsoft/typescript-go/tsox/graph"
 
 func asyncContainsAwait(ss []*graph.Statement) bool {
 	for _, s := range ss {
-		if s.Kind == graph.StatementAsyncAwait || asyncContainsAwait(s.Then) || asyncContainsAwait(s.Else) {
+		if s.Kind == graph.StatementAsyncAwait || asyncContainsAwait(s.Then) || asyncContainsAwait(s.Else) || asyncContainsAwait(s.Body) {
 			return true
 		}
 	}
 	return false
 }
-func asyncConditionalAwait(ss []*graph.Statement) bool {
+func asyncStructuredFlow(ss []*graph.Statement) bool {
 	for _, s := range ss {
-		if s.Kind == graph.StatementIf && (asyncContainsAwait(s.Then) || asyncContainsAwait(s.Else)) {
+		if s.Kind == graph.StatementFor || s.Kind == graph.StatementWhile || s.Kind == graph.StatementForOf {
+			return true
+		}
+		if s.Kind == graph.StatementIf && (asyncNeedsFlow(s.Then) || asyncNeedsFlow(s.Else)) {
 			return true
 		}
 	}
 	return false
+}
+
+// A synchronous loop inside an async body needs the same control edges as a
+// suspending one: it may return early and its carried locals still need liveness.
+func asyncNeedsFlow(ss []*graph.Statement) bool {
+	return asyncContainsAwait(ss) || asyncStructuredFlow(ss)
 }
 
 func buildAsyncFlow(body []*graph.Statement, stages []graph.AsyncStage) *graph.AsyncFlow {
@@ -35,11 +44,32 @@ func buildAsyncFlow(body []*graph.Statement, stages []graph.AsyncStage) *graph.A
 	block = func(ss []*graph.Statement, next int) int {
 		var before []*graph.Statement
 		for i, s := range ss {
+			if s.Kind == graph.StatementFor || s.Kind == graph.StatementWhile {
+				successor := block(ss[i+1:], next)
+				condition := s.Condition
+				if condition == nil {
+					condition = &graph.Expression{Kind: graph.ExpressionBoolean, Boolean: true, Type: graph.Type{Kind: graph.TypeBoolean}, Position: s.Position}
+				}
+				// Allocate the condition before its body so the update/backedge
+				// reuses this entry; synchronous edges remain native dispatch.
+				header := add(graph.AsyncBlock{Await: -1, Condition: condition, Next: -1, Then: -1, Else: successor})
+				update := header
+				if s.Increment != nil {
+					update = add(graph.AsyncBlock{Before: []*graph.Statement{{Kind: graph.StatementExpression, Value: s.Increment, Position: s.Increment.Position}}, Await: -1, Next: header, Then: -1, Else: -1})
+				}
+				bodyEntry := block(s.Body, update)
+				flow.Blocks[header].Then = bodyEntry
+				entry := block(s.Init, header)
+				if len(before) == 0 {
+					return entry
+				}
+				return add(graph.AsyncBlock{Before: before, Await: -1, Next: entry, Then: -1, Else: -1})
+			}
 			if s.Kind == graph.StatementAsyncAwait {
 				successor := block(ss[i+1:], next)
 				return add(graph.AsyncBlock{Before: before, Await: operations[s.Binding], Next: successor, Then: -1, Else: -1})
 			}
-			if s.Kind == graph.StatementIf && (asyncContainsAwait(s.Then) || asyncContainsAwait(s.Else)) {
+			if s.Kind == graph.StatementIf && (asyncNeedsFlow(s.Then) || asyncNeedsFlow(s.Else)) {
 				successor := block(ss[i+1:], next)
 				left, right := block(s.Then, successor), block(s.Else, successor)
 				return add(graph.AsyncBlock{Before: before, Await: -1, Condition: s.Condition, Next: -1, Then: left, Else: right})

@@ -1,0 +1,394 @@
+{
+  "SourcePath": "unchecked.ts",
+  "Shapes": null,
+  "Statements": [
+    {
+      "Kind": "function",
+      "Position": {
+        "SourcePath": "",
+        "Line": 1,
+        "Column": 1
+      },
+      "Binding": 2,
+      "Name": "inspect",
+      "Mutable": false,
+      "Type": {
+        "Kind": "function",
+        "Optional": false,
+        "Parameters": [
+          {
+            "Kind": "unknown",
+            "Optional": false,
+            "Parameters": null,
+            "Result": null,
+            "Shape": 0,
+            "Element": null
+          }
+        ],
+        "Result": {
+          "Kind": "number",
+          "Optional": false,
+          "Parameters": null,
+          "Result": null,
+          "Shape": 0,
+          "Element": null
+        },
+        "Shape": 0,
+        "Element": null
+      },
+      "Parameters": [
+        {
+          "Position": {
+            "SourcePath": "",
+            "Line": 1,
+            "Column": 18
+          },
+          "Binding": 1,
+          "Name": "input",
+          "Type": {
+            "Kind": "unknown",
+            "Optional": false,
+            "Parameters": null,
+            "Result": null,
+            "Shape": 0,
+            "Element": null
+          },
+          "BoundaryOptional": false,
+          "Default": null
+        }
+      ],
+      "ReturnType": {
+        "Kind": "number",
+        "Optional": false,
+        "Parameters": null,
+        "Result": null,
+        "Shape": 0,
+        "Element": null
+      },
+      "Value": null,
+      "Arguments": null,
+      "Condition": null,
+      "Init": null,
+      "Increment": null,
+      "Then": null,
+      "Else": null,
+      "Body": [
+        {
+          "Kind": "variable",
+          "Position": {
+            "SourcePath": "",
+            "Line": 2,
+            "Column": 9
+          },
+          "Binding": 3,
+          "Name": "value",
+          "Mutable": false,
+          "Type": {
+            "Kind": "number",
+            "Optional": false,
+            "Parameters": null,
+            "Result": null,
+            "Shape": 0,
+            "Element": null
+          },
+          "Parameters": null,
+          "ReturnType": {
+            "Kind": "",
+            "Optional": false,
+            "Parameters": null,
+            "Result": null,
+            "Shape": 0,
+            "Element": null
+          },
+          "Value": {
+            "Kind": "unknown-projection",
+            "Position": {
+              "SourcePath": "",
+              "Line": 2,
+              "Column": 25
+            },
+            "Binding": 0,
+            "Type": {
+              "Kind": "number",
+              "Optional": false,
+              "Parameters": null,
+              "Result": null,
+              "Shape": 0,
+              "Element": null
+            },
+            "Number": 0,
+            "String": "",
+            "StringUnits": null,
+            "Boolean": false,
+            "UnwrapOptional": false,
+            "NonNullAssertion": false,
+            "OptionalChain": false,
+            "ChainResultOptional": false,
+            "ChainResultAsserted": false,
+            "Name": "",
+            "Operator": "",
+            "Prefix": false,
+            "Left": null,
+            "Right": null,
+            "Operand": {
+              "Kind": "json-parse",
+              "Position": {
+                "SourcePath": "",
+                "Line": 2,
+                "Column": 25
+              },
+              "Binding": 0,
+              "Type": {
+                "Kind": "unknown",
+                "Optional": false,
+                "Parameters": null,
+                "Result": null,
+                "Shape": 0,
+                "Element": null
+              },
+              "Number": 0,
+              "String": "",
+              "StringUnits": null,
+              "Boolean": false,
+              "UnwrapOptional": false,
+              "NonNullAssertion": false,
+              "OptionalChain": false,
+              "ChainResultOptional": false,
+              "ChainResultAsserted": false,
+              "Name": "",
+              "Operator": "",
+              "Prefix": false,
+              "Left": null,
+              "Right": null,
+              "Operand": {
+                "Kind": "string",
+                "Position": {
+                  "SourcePath": "",
+                  "Line": 2,
+                  "Column": 36
+                },
+                "Binding": 0,
+                "Type": {
+                  "Kind": "string",
+                  "Optional": false,
+                  "Parameters": null,
+                  "Result": null,
+                  "Shape": 0,
+                  "Element": null
+                },
+                "Number": 0,
+                "String": "null",
+                "StringUnits": null,
+                "Boolean": false,
+                "UnwrapOptional": false,
+                "NonNullAssertion": false,
+                "OptionalChain": false,
+                "ChainResultOptional": false,
+                "ChainResultAsserted": false,
+                "Name": "",
+                "Operator": "",
+                "Prefix": false,
+                "Left": null,
+                "Right": null,
+                "Operand": null,
+                "Callee": null,
+                "Arguments": null,
+                "Chunks": null,
+                "Expressions": null,
+                "Parameters": null,
+                "ReturnType": {
+                  "Kind": "",
+                  "Optional": false,
+                  "Parameters": null,
+                  "Result": null,
+                  "Shape": 0,
+                  "Element": null
+                },
+                "Body": null,
+                "Receiver": null,
+                "Index": null,
+                "Properties": null
+              },
+              "Callee": null,
+              "Arguments": null,
+              "Chunks": null,
+              "Expressions": null,
+              "Parameters": null,
+              "ReturnType": {
+                "Kind": "",
+                "Optional": false,
+                "Parameters": null,
+                "Result": null,
+                "Shape": 0,
+                "Element": null
+              },
+              "Body": null,
+              "Receiver": null,
+              "Index": null,
+              "Properties": null
+            },
+            "Callee": null,
+            "Arguments": null,
+            "Chunks": null,
+            "Expressions": null,
+            "Parameters": null,
+            "ReturnType": {
+              "Kind": "",
+              "Optional": false,
+              "Parameters": null,
+              "Result": null,
+              "Shape": 0,
+              "Element": null
+            },
+            "Body": null,
+            "Receiver": null,
+            "Index": null,
+            "Properties": null
+          },
+          "Arguments": null,
+          "Condition": null,
+          "Init": null,
+          "Increment": null,
+          "Then": null,
+          "Else": null,
+          "Body": null
+        },
+        {
+          "Kind": "return",
+          "Position": {
+            "SourcePath": "",
+            "Line": 3,
+            "Column": 3
+          },
+          "Binding": 0,
+          "Name": "",
+          "Mutable": false,
+          "Type": {
+            "Kind": "number",
+            "Optional": false,
+            "Parameters": null,
+            "Result": null,
+            "Shape": 0,
+            "Element": null
+          },
+          "Parameters": null,
+          "ReturnType": {
+            "Kind": "",
+            "Optional": false,
+            "Parameters": null,
+            "Result": null,
+            "Shape": 0,
+            "Element": null
+          },
+          "Value": {
+            "Kind": "number-convert",
+            "Position": {
+              "SourcePath": "",
+              "Line": 3,
+              "Column": 10
+            },
+            "Binding": 0,
+            "Type": {
+              "Kind": "number",
+              "Optional": false,
+              "Parameters": null,
+              "Result": null,
+              "Shape": 0,
+              "Element": null
+            },
+            "Number": 0,
+            "String": "",
+            "StringUnits": null,
+            "Boolean": false,
+            "UnwrapOptional": false,
+            "NonNullAssertion": false,
+            "OptionalChain": false,
+            "ChainResultOptional": false,
+            "ChainResultAsserted": false,
+            "Name": "",
+            "Operator": "",
+            "Prefix": false,
+            "Left": null,
+            "Right": null,
+            "Operand": null,
+            "Callee": null,
+            "Arguments": [
+              {
+                "Kind": "identifier",
+                "Position": {
+                  "SourcePath": "",
+                  "Line": 3,
+                  "Column": 17
+                },
+                "Binding": 3,
+                "Type": {
+                  "Kind": "number",
+                  "Optional": false,
+                  "Parameters": null,
+                  "Result": null,
+                  "Shape": 0,
+                  "Element": null
+                },
+                "Number": 0,
+                "String": "",
+                "StringUnits": null,
+                "Boolean": false,
+                "UnwrapOptional": false,
+                "NonNullAssertion": false,
+                "OptionalChain": false,
+                "ChainResultOptional": false,
+                "ChainResultAsserted": false,
+                "Name": "value",
+                "Operator": "",
+                "Prefix": false,
+                "Left": null,
+                "Right": null,
+                "Operand": null,
+                "Callee": null,
+                "Arguments": null,
+                "Chunks": null,
+                "Expressions": null,
+                "Parameters": null,
+                "ReturnType": {
+                  "Kind": "",
+                  "Optional": false,
+                  "Parameters": null,
+                  "Result": null,
+                  "Shape": 0,
+                  "Element": null
+                },
+                "Body": null,
+                "Receiver": null,
+                "Index": null,
+                "Properties": null
+              }
+            ],
+            "Chunks": null,
+            "Expressions": null,
+            "Parameters": null,
+            "ReturnType": {
+              "Kind": "",
+              "Optional": false,
+              "Parameters": null,
+              "Result": null,
+              "Shape": 0,
+              "Element": null
+            },
+            "Body": null,
+            "Receiver": null,
+            "Index": null,
+            "Properties": null
+          },
+          "Arguments": null,
+          "Condition": null,
+          "Init": null,
+          "Increment": null,
+          "Then": null,
+          "Else": null,
+          "Body": null
+        }
+      ]
+    }
+  ],
+  "EntryExports": null
+}

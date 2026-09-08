@@ -70,6 +70,10 @@ type Shape struct {
 	Position Position
 	Name     string
 	Fields   []Field
+	// Alternatives and Discriminant describe a closed record union. Its actual
+	// constructors, not a narrowed annotation, establish the selected payload.
+	Alternatives []ShapeID
+	Discriminant string
 }
 
 // Field is one required property in a named shape.
@@ -77,6 +81,7 @@ type Field struct {
 	Position Position
 	Name     string
 	Type     Type
+	Literal  *Literal
 }
 
 // FunctionType constructs the function shape used by declarations, arrows,

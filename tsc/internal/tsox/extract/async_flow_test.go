@@ -53,10 +53,34 @@ func TestAsyncConditionalPrunesUnreachableOperations(t *testing.T) {
 	}
 }
 
-func TestAsyncConditionalAwaitLoopsRemainFenced(t *testing.T) {
+func TestAsyncConditionalAwaitLoopHasBackedge(t *testing.T) {
 	source := strings.Replace(asyncSource, " const text=await hostRead(input.key);", `let text="";while(input.key!==text){const value=await hostRead(input.key);text=value;}`, 1)
-	if r := ExtractAsyncFiles("entry.ts", map[string]string{"entry.ts": source}, "handler", "hostRead"); r.Program != nil || len(r.Diagnostics) == 0 {
-		t.Fatal("await loop unexpectedly admitted")
+	r := ExtractAsyncFiles("entry.ts", map[string]string{"entry.ts": source}, "handler", "hostRead")
+	if r.Program == nil {
+		t.Fatal(r.Diagnostics)
+	}
+	flow := r.Program.Flow
+	if flow == nil || len(r.Program.Stages) != 1 {
+		t.Fatal("loop lost its single repeated suspension site")
+	}
+	active, done := map[int]bool{}, map[int]bool{}
+	var visit func(int) bool
+	visit = func(id int) bool {
+		if id < 0 || done[id] {
+			return false
+		}
+		if active[id] {
+			return true
+		}
+		active[id] = true
+		b := flow.Blocks[id]
+		cycle := visit(b.Next) || visit(b.Then) || visit(b.Else)
+		delete(active, id)
+		done[id] = true
+		return cycle
+	}
+	if !visit(flow.Entry) {
+		t.Fatal("await loop lacks an actual cyclic control edge")
 	}
 }
 

@@ -183,7 +183,7 @@ func ExtractAsyncChecked(entry string, p *checked.Program, entryName, hostName s
 	if len(a.Stages) == 0 {
 		return fail(b.fenceDiagnostic(handler, "AsyncAwait", "async entry requires at least one direct const initialization awaiting the selected host"))
 	}
-	if len(asyncHelpers) > 0 || asyncConditionalAwait(structured) {
+	if len(asyncHelpers) > 0 || asyncStructuredFlow(structured) {
 		a.Flow = buildAsyncFlow(structured, a.Stages)
 		pruneAsyncFlow(a)
 	} else {

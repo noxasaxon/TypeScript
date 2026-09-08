@@ -6,12 +6,23 @@ const (
 	// TypeUnknown describes storage whose runtime kind is not statically known.
 	// It does not prove JSON origin, immutability, or a checker's narrowed shape.
 	// Boundary admission must establish the incoming domain independently.
-	TypeUnknown TypeKind = "unknown"
-	TypeNull    TypeKind = "null"
+	TypeUnknown     TypeKind = "unknown"
+	TypeNull        TypeKind = "null"
+	TypeClosedUnion TypeKind = "closed-union"
 )
 
+// Literal is a declaration's scalar discriminant obligation. Constructors must
+// supply that actual value before a backend may omit its storage.
+type Literal struct {
+	Kind    TypeKind
+	Boolean bool
+	String  string
+	Number  float64
+}
+
 const (
-	ExpressionNull ExpressionKind = "null"
+	ExpressionClosedValue ExpressionKind = "closed-value"
+	ExpressionNull        ExpressionKind = "null"
 	// JSONParse evaluates Operand as text and parses at runtime; syntax errors
 	// throw. Its TypeUnknown result is not the type of an annotation or cast.
 	ExpressionJSONParse ExpressionKind = "json-parse"
