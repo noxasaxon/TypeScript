@@ -22,7 +22,7 @@ func ExtractAsyncFiles(entry string, sources map[string]string, entryName, hostN
 func ExtractAsyncChecked(entry string, p *checked.Program, entryName, hostName string) graph.AsyncResult {
 	c, done := p.Compiler.GetTypeChecker(context.Background())
 	defer done()
-	b := &builder{sourcePath: entry, file: p.Entry, checker: c, bindings: make(map[*ast.Symbol]graph.BindingID), bindingTypes: make(map[graph.BindingID]graph.Type), nextBinding: 1, shapeIDs: make(map[*ast.Symbol]graph.ShapeID), shapeBuilding: make(map[*ast.Symbol]bool), moduleFiles: p.Files, entryFile: p.Entry, asyncThrow: true}
+	b := &builder{standardEntry: hostName == "", jsonValues: hostName == "", sourcePath: entry, file: p.Entry, checker: c, bindings: make(map[*ast.Symbol]graph.BindingID), bindingTypes: make(map[graph.BindingID]graph.Type), nextBinding: 1, shapeIDs: make(map[*ast.Symbol]graph.ShapeID), shapeBuilding: make(map[*ast.Symbol]bool), moduleFiles: p.Files, entryFile: p.Entry, asyncThrow: true}
 	fail := func(f *fenceError) graph.AsyncResult {
 		return graph.AsyncResult{Diagnostics: []graph.Diagnostic{f.diagnostic}}
 	}
@@ -50,28 +50,35 @@ func ExtractAsyncChecked(entry string, p *checked.Program, entryName, hostName s
 			}
 		}
 	}
-	if handler == nil || host == nil || handler == host {
+	if handler == nil || hostName != "" && (host == nil || handler == host) {
 		return fail(b.fenceDiagnostic(p.Entry.AsNode(), "AsyncSignature", "async entry and host must name distinct function declarations"))
 	}
-	b.file = ast.GetSourceFileOfNode(host)
-	hd := host.AsFunctionDeclaration()
-	if hd.Body != nil || !hasModifier(hd.Modifiers(), ast.KindDeclareKeyword) || hd.TypeParameters != nil || hd.AsteriskToken != nil || len(hd.Parameters.Nodes) != 1 {
-		return fail(b.fenceDiagnostic(host, "AsyncHost", "host must be an ambient read(string): Promise<string> declaration"))
-	}
-	hp, f := b.parameters(hd.Parameters.Nodes)
-	if f != nil {
-		return fail(f)
-	}
-	hr, f := b.asyncPromiseResult(hd.Type)
-	if f != nil {
-		return fail(f)
-	}
-	if hp[0].Default != nil || hp[0].BoundaryOptional || hp[0].Type.Kind != graph.TypeString || hr.Kind != graph.TypeString || hr.Optional {
-		return fail(b.fenceDiagnostic(host, "AsyncHost", "host requires one string argument and Promise<string> result"))
-	}
-	hostBinding, f := b.binding(hd.Name())
-	if f != nil {
-		return fail(f)
+	var hostBinding graph.BindingID
+	var hostSymbol *ast.Symbol
+	var f *fenceError
+	if host != nil {
+		b.file = ast.GetSourceFileOfNode(host)
+		hd := host.AsFunctionDeclaration()
+		if hd.Body != nil || !hasModifier(hd.Modifiers(), ast.KindDeclareKeyword) || hd.TypeParameters != nil || hd.AsteriskToken != nil || len(hd.Parameters.Nodes) != 1 {
+			return fail(b.fenceDiagnostic(host, "AsyncHost", "host must be an ambient read(string): Promise<string> declaration"))
+		}
+		hp, f := b.parameters(hd.Parameters.Nodes)
+		if f != nil {
+			return fail(f)
+		}
+		hr, f := b.asyncPromiseResult(hd.Type)
+		if f != nil {
+			return fail(f)
+		}
+		if hp[0].Default != nil || hp[0].BoundaryOptional || hp[0].Type.Kind != graph.TypeString || hr.Kind != graph.TypeString || hr.Optional {
+			return fail(b.fenceDiagnostic(host, "AsyncHost", "host requires one string argument and Promise<string> result"))
+		}
+		hostBinding, f = b.binding(hd.Name())
+		if f != nil {
+			return fail(f)
+		}
+
+		hostSymbol = b.sourceSymbol(hd.Name())
 	}
 
 	helpers := map[*ast.Symbol]*graph.AsyncHelper{}
@@ -141,20 +148,23 @@ func ExtractAsyncChecked(entry string, p *checked.Program, entryName, hostName s
 	if f != nil {
 		return fail(f)
 	}
-	if len(params) != 1 || params[0].Type.Kind != graph.TypeObject || params[0].Type.Optional || params[0].BoundaryOptional || params[0].Default != nil {
+	if len(params) != 1 || params[0].Type.Optional || params[0].BoundaryOptional || params[0].Default != nil || (!b.standardEntry && params[0].Type.Kind != graph.TypeObject) || (b.standardEntry && params[0].Type.Kind != graph.TypeRequest) {
 		return fail(b.fenceDiagnostic(handler, "AsyncSignature", "async entry requires one required flat record input"))
 	}
 	result, f := b.asyncPromiseResult(fd.Type)
 	if f != nil {
 		return fail(f)
 	}
-	if result.Kind != graph.TypeObject || result.Optional {
+	if result.Optional || (!b.standardEntry && result.Kind != graph.TypeObject) || (b.standardEntry && result.Kind != graph.TypeResponse) {
 		return fail(b.fenceDiagnostic(handler, "AsyncSignature", "async entry requires Promise of a flat response record"))
 	}
 	b.returnType = &result
 	a := &graph.AsyncProgram{Position: b.position(handler), Input: params[0], Result: result}
+	if b.standardEntry {
+		a.Platform = graph.PlatformStandard
+	}
 	body := fd.Body.AsBlock().Statements.Nodes
-	if len(body) == 1 && body[0].Kind == ast.KindTryStatement {
+	if !b.standardEntry && len(body) == 1 && body[0].Kind == ast.KindTryStatement {
 		tr := body[0].AsTryStatement()
 		body = tr.TryBlock.AsBlock().Statements.Nodes
 		if tr.CatchClause != nil {
@@ -179,14 +189,14 @@ func ExtractAsyncChecked(entry string, p *checked.Program, entryName, hostName s
 		}
 	}
 
-	structured, f := b.asyncBody(body, a, b.sourceSymbol(hd.Name()), hostBinding, helpers)
+	structured, f := b.asyncBody(body, a, hostSymbol, hostBinding, helpers)
 	if f != nil {
 		return fail(f)
 	}
 	if len(a.Stages) == 0 {
 		return fail(b.fenceDiagnostic(handler, "AsyncAwait", "async entry requires at least one direct const initialization awaiting the selected host"))
 	}
-	if len(asyncHelpers) > 0 || asyncStructuredFlow(structured) {
+	if b.standardEntry || len(asyncHelpers) > 0 || asyncStructuredFlow(structured) {
 		a.Flow = buildAsyncFlow(structured, a.Stages)
 		pruneAsyncFlow(a)
 	} else {
@@ -208,9 +218,12 @@ func ExtractAsyncChecked(entry string, p *checked.Program, entryName, hostName s
 		n := helperNodes[i]
 		b.file = ast.GetSourceFileOfNode(n)
 		b.returnType = &helper.Program.Result
+		if b.standardEntry {
+			helper.Program.Platform = graph.PlatformStandard
+		}
 		body := n.AsFunctionDeclaration().Body.AsBlock().Statements.Nodes
 		// Cleanup belongs to each helper promise, separately from its caller.
-		if len(body) == 1 && body[0].Kind == ast.KindTryStatement {
+		if !b.standardEntry && len(body) == 1 && body[0].Kind == ast.KindTryStatement {
 			tr := body[0].AsTryStatement()
 			body = tr.TryBlock.AsBlock().Statements.Nodes
 			if tr.CatchClause != nil {
@@ -234,7 +247,7 @@ func ExtractAsyncChecked(entry string, p *checked.Program, entryName, hostName s
 				}
 			}
 		}
-		structured, f := b.asyncBody(body, helper.Program, b.sourceSymbol(hd.Name()), hostBinding, helpers)
+		structured, f := b.asyncBody(body, helper.Program, hostSymbol, hostBinding, helpers)
 		if f != nil {
 			return fail(f)
 		}

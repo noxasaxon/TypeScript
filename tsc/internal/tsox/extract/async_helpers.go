@@ -10,6 +10,53 @@ func (b *builder) asyncBody(nodes []*ast.Node, a *graph.AsyncProgram, hostSymbol
 	extractBody = func(nodes []*ast.Node) ([]*graph.Statement, *fenceError) {
 		var before []*graph.Statement
 		for _, n := range nodes {
+			if n.Kind == ast.KindExpressionStatement && n.AsExpressionStatement().Expression.Kind == ast.KindAwaitExpression {
+				awaited := n.AsExpressionStatement().Expression.AsAwaitExpression().Expression
+				if producer, fulfilled, f, handled := b.standardProducer(awaited); handled {
+					if f != nil {
+						return nil, f
+					}
+					binding := b.nextBinding
+					b.nextBinding++
+					b.bindingTypes[binding] = fulfilled
+					operation := graph.AsyncAwait{Position: b.position(n), Binding: binding, Name: "ignored_await", Type: fulfilled, Producer: producer}
+					a.Stages = append(a.Stages, graph.AsyncStage{Await: operation})
+					before = append(before, &graph.Statement{Kind: graph.StatementAsyncAwait, Position: b.position(n), Binding: binding, Name: operation.Name, Type: fulfilled, Producer: producer})
+					continue
+				}
+			}
+			if n.Kind == ast.KindTryStatement {
+				tr := n.AsTryStatement()
+				region := &graph.AsyncProtectedRegion{Position: b.position(n)}
+				var f *fenceError
+				region.Try, f = extractBody(tr.TryBlock.AsBlock().Statements.Nodes)
+				if f != nil {
+					return nil, f
+				}
+				if tr.CatchClause != nil {
+					clause := tr.CatchClause.AsCatchClause()
+					region.HasCatch = true
+					if clause.VariableDeclaration != nil {
+						region.CatchBinding, f = b.errorCatchBinding(clause.VariableDeclaration)
+						if f != nil {
+							return nil, f
+						}
+					}
+					region.Catch, f = extractBody(clause.Block.AsBlock().Statements.Nodes)
+					if f != nil {
+						return nil, f
+					}
+				}
+				if tr.FinallyBlock != nil {
+					region.HasFinally = true
+					region.Finally, f = extractBody(tr.FinallyBlock.AsBlock().Statements.Nodes)
+					if f != nil {
+						return nil, f
+					}
+				}
+				before = append(before, &graph.Statement{Kind: graph.StatementAsyncProtected, Position: b.position(n), Protected: region})
+				continue
+			}
 			if n.Kind == ast.KindForStatement || n.Kind == ast.KindWhileStatement {
 				loop, f := b.loopStatement(n, func(node *ast.Node) ([]*graph.Statement, *fenceError) {
 					if node.Kind == ast.KindBlock {
@@ -60,6 +107,20 @@ func (b *builder) asyncBody(nodes []*ast.Node, a *graph.AsyncProgram, hostSymbol
 						callNode := d.Initializer.AsAwaitExpression().Expression
 						if callNode.Kind != ast.KindCallExpression {
 							return nil, b.fenceDiagnostic(callNode, "AsyncHost", "await requires the selected host operation")
+						}
+						if producer, fulfilled, f, handled := b.standardProducer(callNode); handled {
+							if f != nil {
+								return nil, f
+							}
+							binding, f := b.binding(d.Name())
+							if f != nil {
+								return nil, f
+							}
+							b.bindingTypes[binding] = fulfilled
+							operation := graph.AsyncAwait{Position: b.position(d.Initializer), Binding: binding, Name: d.Name().Text(), Type: fulfilled, Producer: producer}
+							a.Stages = append(a.Stages, graph.AsyncStage{Await: operation})
+							before = append(before, &graph.Statement{Kind: graph.StatementAsyncAwait, Binding: binding, Name: operation.Name, Position: operation.Position, Type: fulfilled, Producer: producer})
+							continue
 						}
 						call := callNode.AsCallExpression()
 						if call.Expression.Kind != ast.KindIdentifier || call.QuestionDotToken != nil || call.TypeArguments != nil {

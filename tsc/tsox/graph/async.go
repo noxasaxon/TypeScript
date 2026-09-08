@@ -3,6 +3,7 @@ package graph
 // AsyncProgram is the separately admitted sequential host entrypoint. The
 // ordinary Program cannot accidentally interpret an await as synchronous work.
 type AsyncProgram struct {
+	Platform     AsyncPlatformKind
 	Module       *Program
 	Position     Position
 	Input        Parameter
@@ -31,6 +32,8 @@ type AsyncStage struct {
 // Type is the fulfillment value. The host contract still takes/fulfills strings;
 // direct helper results use their actual type. Rejections currently use strings.
 type AsyncAwait struct {
+	// Producer is exclusive with the legacy Host/Argument and direct Helper lanes.
+	Producer *AsyncProducer
 	Position Position
 	Host     BindingID
 	// Helper selects an owned child continuation. Argument then contains an
@@ -53,15 +56,19 @@ const StatementThrow StatementKind = "throw"
 // the structured analysis projection: StatementAsyncAwait marks each suspension.
 // It is never an ordinary executable statement.
 type AsyncFlow struct {
-	Entry  int
-	Blocks []AsyncBlock
-	Body   []*Statement
+	Regions []AsyncRegion
+	Entry   int
+	Blocks  []AsyncBlock
+	Body    []*Statement
 }
 
 // AsyncBlock ends with a host suspension, conditional successors, or Next.
 // Next == -1 denotes terminal completion; terminal statements remain in Before.
 // Await refers to the corresponding AsyncProgram.Stages operation.
 type AsyncBlock struct {
+	Region           int
+	Phase            AsyncRegionPhase
+	Completion       AsyncCompletionKind
 	Before           []*Statement
 	Await            int // -1 for synchronous blocks
 	Condition        *Expression

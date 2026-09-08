@@ -134,6 +134,9 @@ func ReadProject(configPath, entry string) (*Project, []graph.Diagnostic) {
 			return d
 		}
 		for _, dependency := range imports {
+			if StandardModule(dependency.name) {
+				continue
+			}
 			if d := visit(filepath.Join(filepath.Dir(name), dependency.name), file, dependency.node); d != nil {
 				return d
 			}
@@ -241,7 +244,7 @@ func validateRuntimeNames(program *Program) *graph.Diagnostic {
 			if symbol != nil && symbol.Flags&ast.SymbolFlagsAlias != 0 {
 				symbol = c.GetAliasedSymbol(symbol)
 			}
-			if !hasRuntimeValue(symbol) {
+			if !standardRuntimeSymbol(symbol) && !hasRuntimeValue(symbol) {
 				return diagnostic(file, program.Files[file], node, "ModuleRuntimeName", "Node retains this import/export name but its declaration is erased; use import type or export type")
 			}
 			return nil

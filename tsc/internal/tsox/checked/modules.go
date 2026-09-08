@@ -82,6 +82,9 @@ func ReadSources(entry string) (string, map[string]string, []graph.Diagnostic) {
 		}
 		sources[key] = string(contents)
 		for _, dependency := range imports {
+			if StandardModule(dependency.name) {
+				continue
+			}
 			if diagnostic := visit(filepath.Join(filepath.Dir(name), filepath.FromSlash(dependency.name)), file, dependency.node); diagnostic != nil {
 				return diagnostic
 			}
@@ -106,6 +109,8 @@ func New(entry string, sources map[string]string) (*Program, []graph.Diagnostic)
 
 func newProgram(entry string, sources map[string]string, configured *tsoptions.ParsedCommandLine) (*Program, []graph.Diagnostic) {
 	files := make(map[string]string, len(sources))
+	files[StandardNodeDeclarationPath] = standardNodeDeclarations
+	files[StandardNodeGlobalsPath] = standardNodeGlobals
 	labels := make(map[string]string, len(sources))
 	keys := make([]string, 0, len(sources))
 	for name := range sources {
@@ -130,6 +135,7 @@ func newProgram(entry string, sources map[string]string, configured *tsoptions.P
 	if config == nil {
 		config = tsoptions.NewParsedCommandLine(options, []string{entryKey}, tspath.ComparePathsOptions{UseCaseSensitiveFileNames: true, CurrentDirectory: "/"})
 	}
+	config = standardConfig(config)
 	program := compiler.NewProgram(compiler.ProgramOptions{Config: config, Host: host, SingleThreaded: core.TSTrue})
 	program.BindSourceFiles()
 	if configured != nil {
@@ -180,6 +186,9 @@ func newProgram(entry string, sources map[string]string, configured *tsoptions.P
 		}
 		states[key] = 1
 		for _, dependency := range imports {
+			if StandardModule(dependency.name) {
+				continue
+			}
 			target := path.Clean(path.Join(path.Dir(key), dependency.name))
 			if d := visit(target, dependency.node, file); d != nil {
 				return d
@@ -294,6 +303,9 @@ func moduleSpecifier(file *ast.SourceFile, sourcePath string, node *ast.Node) (s
 		return "", diagnostic(file, sourcePath, node, "ModuleSpecifier", "unsupported module specifier: expected explicit relative .ts source")
 	}
 	name := node.Text()
+	if StandardModule(name) {
+		return name, nil
+	}
 	if !(strings.HasPrefix(name, "./") || strings.HasPrefix(name, "../")) || !strings.HasSuffix(name, ".ts") || strings.HasSuffix(name, ".d.ts") || strings.ContainsAny(name, "\\?#%") {
 		return "", diagnostic(file, sourcePath, node, "ModuleSpecifier", "unsupported module specifier: expected explicit relative .ts source")
 	}

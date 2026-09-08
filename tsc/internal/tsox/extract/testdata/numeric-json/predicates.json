@@ -3,6 +3,8 @@
   "Shapes": null,
   "Statements": [
     {
+      "Producer": null,
+      "Protected": null,
       "Kind": "function",
       "Position": {
         "SourcePath": "",
@@ -74,6 +76,8 @@
       "Else": null,
       "Body": [
         {
+          "Producer": null,
+          "Protected": null,
           "Kind": "if",
           "Position": {
             "SourcePath": "",
@@ -103,6 +107,7 @@
           "Value": null,
           "Arguments": null,
           "Condition": {
+            "Platform": null,
             "Kind": "number-is-finite",
             "Position": {
               "SourcePath": "",
@@ -136,6 +141,7 @@
             "Callee": null,
             "Arguments": [
               {
+                "Platform": null,
                 "Kind": "identifier",
                 "Position": {
                   "SourcePath": "",
@@ -205,6 +211,8 @@
           "Increment": null,
           "Then": [
             {
+              "Producer": null,
+              "Protected": null,
               "Kind": "if",
               "Position": {
                 "SourcePath": "",
@@ -234,6 +242,7 @@
               "Value": null,
               "Arguments": null,
               "Condition": {
+                "Platform": null,
                 "Kind": "binary",
                 "Position": {
                   "SourcePath": "",
@@ -262,6 +271,7 @@
                 "Operator": "!==",
                 "Prefix": false,
                 "Left": {
+                  "Platform": null,
                   "Kind": "typeof",
                   "Position": {
                     "SourcePath": "",
@@ -292,6 +302,7 @@
                   "Left": null,
                   "Right": null,
                   "Operand": {
+                    "Platform": null,
                     "Kind": "identifier",
                     "Position": {
                       "SourcePath": "",
@@ -359,6 +370,7 @@
                   "Properties": null
                 },
                 "Right": {
+                  "Platform": null,
                   "Kind": "string",
                   "Position": {
                     "SourcePath": "",
@@ -430,6 +442,8 @@
               "Increment": null,
               "Then": [
                 {
+                  "Producer": null,
+                  "Protected": null,
                   "Kind": "return",
                   "Position": {
                     "SourcePath": "",
@@ -457,6 +471,7 @@
                     "Element": null
                   },
                   "Value": {
+                    "Platform": null,
                     "Kind": "string",
                     "Position": {
                       "SourcePath": "",
@@ -518,6 +533,8 @@
               "Body": null
             },
             {
+              "Producer": null,
+              "Protected": null,
               "Kind": "return",
               "Position": {
                 "SourcePath": "",
@@ -545,6 +562,7 @@
                 "Element": null
               },
               "Value": {
+                "Platform": null,
                 "Kind": "template",
                 "Position": {
                   "SourcePath": "",
@@ -584,6 +602,7 @@
                 ],
                 "Expressions": [
                   {
+                    "Platform": null,
                     "Kind": "number-convert",
                     "Position": {
                       "SourcePath": "",
@@ -617,6 +636,7 @@
                     "Callee": null,
                     "Arguments": [
                       {
+                        "Platform": null,
                         "Kind": "unknown-projection",
                         "Position": {
                           "SourcePath": "",
@@ -647,6 +667,7 @@
                         "Left": null,
                         "Right": null,
                         "Operand": {
+                          "Platform": null,
                           "Kind": "identifier",
                           "Position": {
                             "SourcePath": "",
@@ -731,6 +752,7 @@
                     "Properties": null
                   },
                   {
+                    "Platform": null,
                     "Kind": "number-is-integer",
                     "Position": {
                       "SourcePath": "",
@@ -764,6 +786,7 @@
                     "Callee": null,
                     "Arguments": [
                       {
+                        "Platform": null,
                         "Kind": "identifier",
                         "Position": {
                           "SourcePath": "",
@@ -857,6 +880,8 @@
           "Body": null
         },
         {
+          "Producer": null,
+          "Protected": null,
           "Kind": "if",
           "Position": {
             "SourcePath": "",
@@ -886,6 +911,7 @@
           "Value": null,
           "Arguments": null,
           "Condition": {
+            "Platform": null,
             "Kind": "binary",
             "Position": {
               "SourcePath": "",
@@ -914,6 +940,7 @@
             "Operator": "===",
             "Prefix": false,
             "Left": {
+              "Platform": null,
               "Kind": "typeof",
               "Position": {
                 "SourcePath": "",
@@ -944,6 +971,7 @@
               "Left": null,
               "Right": null,
               "Operand": {
+                "Platform": null,
                 "Kind": "identifier",
                 "Position": {
                   "SourcePath": "",
@@ -1011,6 +1039,7 @@
               "Properties": null
             },
             "Right": {
+              "Platform": null,
               "Kind": "string",
               "Position": {
                 "SourcePath": "",
@@ -1082,6 +1111,8 @@
           "Increment": null,
           "Then": [
             {
+              "Producer": null,
+              "Protected": null,
               "Kind": "return",
               "Position": {
                 "SourcePath": "",
@@ -1109,6 +1140,7 @@
                 "Element": null
               },
               "Value": {
+                "Platform": null,
                 "Kind": "template",
                 "Position": {
                   "SourcePath": "",
@@ -1148,6 +1180,7 @@
                 ],
                 "Expressions": [
                   {
+                    "Platform": null,
                     "Kind": "number-convert",
                     "Position": {
                       "SourcePath": "",
@@ -1181,6 +1214,7 @@
                     "Callee": null,
                     "Arguments": [
                       {
+                        "Platform": null,
                         "Kind": "unknown-projection",
                         "Position": {
                           "SourcePath": "",
@@ -1211,6 +1245,7 @@
                         "Left": null,
                         "Right": null,
                         "Operand": {
+                          "Platform": null,
                           "Kind": "identifier",
                           "Position": {
                             "SourcePath": "",
@@ -1295,6 +1330,7 @@
                     "Properties": null
                   },
                   {
+                    "Platform": null,
                     "Kind": "number-is-integer",
                     "Position": {
                       "SourcePath": "",
@@ -1328,6 +1364,7 @@
                     "Callee": null,
                     "Arguments": [
                       {
+                        "Platform": null,
                         "Kind": "identifier",
                         "Position": {
                           "SourcePath": "",
@@ -1421,6 +1458,8 @@
           "Body": null
         },
         {
+          "Producer": null,
+          "Protected": null,
           "Kind": "return",
           "Position": {
             "SourcePath": "",
@@ -1448,6 +1487,7 @@
             "Element": null
           },
           "Value": {
+            "Platform": null,
             "Kind": "template",
             "Position": {
               "SourcePath": "",
@@ -1486,6 +1526,7 @@
             ],
             "Expressions": [
               {
+                "Platform": null,
                 "Kind": "number-is-integer",
                 "Position": {
                   "SourcePath": "",
@@ -1519,6 +1560,7 @@
                 "Callee": null,
                 "Arguments": [
                   {
+                    "Platform": null,
                     "Kind": "identifier",
                     "Position": {
                       "SourcePath": "",

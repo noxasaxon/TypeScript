@@ -123,6 +123,7 @@ func typescriptDiagnostic(sourcePath string, file *ast.SourceFile, diagnostic *a
 }
 
 type builder struct {
+	standardEntry     bool
 	jsonValues        bool
 	jsonShapeIDs      map[*checker.Type]graph.ShapeID
 	jsonShapeBuilding map[*checker.Type]bool
@@ -589,6 +590,9 @@ func (b *builder) expression(node *ast.Node) (*graph.Expression, *fenceError) {
 		return value, fence
 	}
 	if value, fence, handled := b.numericExpression(node); handled {
+		return value, fence
+	}
+	if value, fence, handled := b.platformValueExpression(node); handled {
 		return value, fence
 	}
 	if b.jsonValues {
@@ -1745,7 +1749,17 @@ func (b *builder) validateTypeNode(node *ast.Node) *fenceError {
 }
 
 func (b *builder) graphType(value *checker.Type, node *ast.Node) (graph.Type, *fenceError) {
+	if typ, ok := b.platformValueType(value); ok {
+		return typ, nil
+	}
+	if kind := b.standardType(value); kind != "" {
+		return graph.Type{Kind: kind}, nil
+	}
 	flags := value.Flags()
+	if b.standardEntry && platformNullableStringType(value) {
+		return graph.Type{Kind: graph.TypeNullableString}, nil
+	}
+
 	if b.jsonValues {
 		if result, fence, handled := b.jsonLayoutType(value, node); handled {
 			return result, fence

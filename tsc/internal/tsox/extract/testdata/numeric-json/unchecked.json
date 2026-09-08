@@ -3,6 +3,8 @@
   "Shapes": null,
   "Statements": [
     {
+      "Producer": null,
+      "Protected": null,
       "Kind": "function",
       "Position": {
         "SourcePath": "",
@@ -74,6 +76,8 @@
       "Else": null,
       "Body": [
         {
+          "Producer": null,
+          "Protected": null,
           "Kind": "variable",
           "Position": {
             "SourcePath": "",
@@ -101,6 +105,7 @@
             "Element": null
           },
           "Value": {
+            "Platform": null,
             "Kind": "unknown-projection",
             "Position": {
               "SourcePath": "",
@@ -131,6 +136,7 @@
             "Left": null,
             "Right": null,
             "Operand": {
+              "Platform": null,
               "Kind": "json-parse",
               "Position": {
                 "SourcePath": "",
@@ -161,6 +167,7 @@
               "Left": null,
               "Right": null,
               "Operand": {
+                "Platform": null,
                 "Kind": "string",
                 "Position": {
                   "SourcePath": "",
@@ -254,6 +261,8 @@
           "Body": null
         },
         {
+          "Producer": null,
+          "Protected": null,
           "Kind": "return",
           "Position": {
             "SourcePath": "",
@@ -281,6 +290,7 @@
             "Element": null
           },
           "Value": {
+            "Platform": null,
             "Kind": "number-convert",
             "Position": {
               "SourcePath": "",
@@ -314,6 +324,7 @@
             "Callee": null,
             "Arguments": [
               {
+                "Platform": null,
                 "Kind": "identifier",
                 "Position": {
                   "SourcePath": "",

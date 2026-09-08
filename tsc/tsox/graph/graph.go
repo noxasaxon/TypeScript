@@ -120,6 +120,10 @@ const (
 // Statement stores only fields used by its Kind. Blocks are normalized into
 // statement slices on their owning control-flow node.
 type Statement struct {
+	// Producer is the resolved standard operation on an async-await projection.
+	Producer *AsyncProducer
+	// Protected retains lexical exception regions in the shared body graph.
+	Protected  *AsyncProtectedRegion
 	Kind       StatementKind
 	Position   Position
 	Binding    BindingID
@@ -178,6 +182,7 @@ type PropertyValue struct {
 // Expression stores only fields used by its Kind. Chunks has exactly one more
 // entry than Expressions for a template expression.
 type Expression struct {
+	Platform *PlatformValue
 	Kind     ExpressionKind
 	Position Position
 	Binding  BindingID

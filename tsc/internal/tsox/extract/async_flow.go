@@ -4,7 +4,7 @@ import "github.com/microsoft/typescript-go/tsox/graph"
 
 func asyncContainsAwait(ss []*graph.Statement) bool {
 	for _, s := range ss {
-		if s.Kind == graph.StatementAsyncAwait || asyncContainsAwait(s.Then) || asyncContainsAwait(s.Else) || asyncContainsAwait(s.Body) {
+		if s.Kind == graph.StatementAsyncProtected || s.Kind == graph.StatementAsyncAwait || asyncContainsAwait(s.Then) || asyncContainsAwait(s.Else) || asyncContainsAwait(s.Body) {
 			return true
 		}
 	}
@@ -12,7 +12,7 @@ func asyncContainsAwait(ss []*graph.Statement) bool {
 }
 func asyncStructuredFlow(ss []*graph.Statement) bool {
 	for _, s := range ss {
-		if s.Kind == graph.StatementFor || s.Kind == graph.StatementWhile || s.Kind == graph.StatementForOf {
+		if s.Kind == graph.StatementAsyncProtected || s.Kind == graph.StatementFor || s.Kind == graph.StatementWhile || s.Kind == graph.StatementForOf {
 			return true
 		}
 		if s.Kind == graph.StatementIf && (asyncNeedsFlow(s.Then) || asyncNeedsFlow(s.Else)) {
@@ -30,11 +30,13 @@ func asyncNeedsFlow(ss []*graph.Statement) bool {
 
 func buildAsyncFlow(body []*graph.Statement, stages []graph.AsyncStage) *graph.AsyncFlow {
 	flow := &graph.AsyncFlow{Body: body}
+	region, phase := 0, graph.AsyncRegionBody
 	operations := map[graph.BindingID]int{}
 	for i, stage := range stages {
 		operations[stage.Await.Binding] = i
 	}
 	add := func(block graph.AsyncBlock) int {
+		block.Region, block.Phase = region, phase
 		id := len(flow.Blocks)
 		flow.Blocks = append(flow.Blocks, block)
 		return id
@@ -44,6 +46,37 @@ func buildAsyncFlow(body []*graph.Statement, stages []graph.AsyncStage) *graph.A
 	block = func(ss []*graph.Statement, next int) int {
 		var before []*graph.Statement
 		for i, s := range ss {
+			if s.Kind == graph.StatementAsyncProtected {
+				successor := block(ss[i+1:], next)
+				if len(flow.Regions) == 0 {
+					flow.Regions = append(flow.Regions, graph.AsyncRegion{Parent: -1, TryEntry: -1, CatchEntry: -1, FinallyEntry: -1, Next: -1})
+				}
+				outer, outerPhase := region, phase
+				id := len(flow.Regions)
+				r := s.Protected
+				flow.Regions = append(flow.Regions, graph.AsyncRegion{Parent: outer, ParentPhase: outerPhase, TryEntry: -1, CatchEntry: -1, FinallyEntry: -1, Next: successor, CatchBinding: r.CatchBinding})
+				region, phase = id, graph.AsyncRegionFinally
+				finallyEntry := -1
+				if r.HasFinally {
+					resume := add(graph.AsyncBlock{Await: -1, Next: -1, Then: -1, Else: -1, Completion: graph.AsyncResume})
+					finallyEntry = block(r.Finally, resume)
+				}
+				region, phase = id, graph.AsyncRegionCatch
+				catchEntry := -1
+				if r.HasCatch {
+					normal := add(graph.AsyncBlock{Await: -1, Next: successor, Then: -1, Else: -1, Completion: graph.AsyncNormal})
+					catchEntry = block(r.Catch, normal)
+				}
+				region, phase = id, graph.AsyncRegionTry
+				normal := add(graph.AsyncBlock{Await: -1, Next: successor, Then: -1, Else: -1, Completion: graph.AsyncNormal})
+				tryEntry := block(r.Try, normal)
+				flow.Regions[id].TryEntry, flow.Regions[id].CatchEntry, flow.Regions[id].FinallyEntry = tryEntry, catchEntry, finallyEntry
+				region, phase = outer, outerPhase
+				if len(before) == 0 {
+					return tryEntry
+				}
+				return add(graph.AsyncBlock{Before: before, Await: -1, Next: tryEntry, Then: -1, Else: -1})
+			}
 			if s.Kind == graph.StatementFor || s.Kind == graph.StatementWhile {
 				successor := block(ss[i+1:], next)
 				condition := s.Condition
@@ -99,12 +132,8 @@ func pruneAsyncFlow(a *graph.AsyncProgram) {
 			return
 		}
 		reachable[id] = true
-		b := a.Flow.Blocks[id]
-		if b.Condition != nil {
-			visit(b.Then)
-			visit(b.Else)
-		} else {
-			visit(b.Next)
+		for _, next := range a.Flow.Successors(id) {
+			visit(next)
 		}
 	}
 	visit(a.Flow.Entry)
@@ -136,6 +165,16 @@ func pruneAsyncFlow(a *graph.AsyncProgram) {
 		if b.Await >= 0 {
 			b.Await = stageIDs[b.Await]
 		}
+	}
+	remap := func(id int) int {
+		if next, ok := ids[id]; ok {
+			return next
+		}
+		return -1
+	}
+	for i := range a.Flow.Regions {
+		r := &a.Flow.Regions[i]
+		r.TryEntry, r.CatchEntry, r.FinallyEntry, r.Next = remap(r.TryEntry), remap(r.CatchEntry), remap(r.FinallyEntry), remap(r.Next)
 	}
 	a.Flow.Entry = ids[a.Flow.Entry]
 	a.Flow.Blocks = blocks
