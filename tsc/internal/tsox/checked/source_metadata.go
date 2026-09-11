@@ -88,7 +88,11 @@ func sourceMetadataDigest(v reflect.Value) ([32]byte, error) {
 			if v.IsNil() {
 				fmt.Fprint(h, "nil;")
 			}
-			keys := v.MapKeys()
+			type orderedKey struct {
+				value reflect.Value
+				text  string
+			}
+			keys := make([]orderedKey, 0, v.Len())
 			keyText := func(k reflect.Value) string {
 				switch k.Kind() {
 				case reflect.String:
@@ -102,16 +106,23 @@ func sourceMetadataDigest(v reflect.Value) ([32]byte, error) {
 				}
 				return ""
 			}
-			sort.Slice(keys, func(i, j int) bool { return keyText(keys[i]) < keyText(keys[j]) })
-			fmt.Fprintf(h, "%d;", len(keys))
-			for _, k := range keys {
-				if keyText(k) == "" {
+			// Compute the canonical order once per key, not once per comparison.
+			// This is local to one digest; each validation still reads every key
+			// and value afresh, including pointer identities and mutable metadata.
+			for _, k := range v.MapKeys() {
+				text := keyText(k)
+				if text == "" {
 					return fmt.Errorf("unclassified source map key %s", k.Type())
 				}
-				if err := walk(k, depth+1); err != nil {
+				keys = append(keys, orderedKey{k, text})
+			}
+			sort.Slice(keys, func(i, j int) bool { return keys[i].text < keys[j].text })
+			fmt.Fprintf(h, "%d;", len(keys))
+			for _, k := range keys {
+				if err := walk(k.value, depth+1); err != nil {
 					return err
 				}
-				if err := walk(v.MapIndex(k), depth+1); err != nil {
+				if err := walk(v.MapIndex(k.value), depth+1); err != nil {
 					return err
 				}
 			}

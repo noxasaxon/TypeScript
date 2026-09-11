@@ -1,7 +1,6 @@
 package checked
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/tsox/graph"
@@ -68,7 +67,7 @@ func (s *SourceRecoveryScope) ValidateSourceCoverage() error {
 	expected := 0
 	for _, record := range s.view.Files {
 		file := p.Compiler.GetSourceFile(record.Path)
-		if file == nil || !s.nodes[file.AsNode()] || fmt.Sprintf("%x", sha256.Sum256([]byte(file.Text()))) != record.SHA256 {
+		if file == nil || !s.nodes[file.AsNode()] || fmt.Sprintf("%x", sourceTextDigest(file.Text())) != record.SHA256 {
 			return fmt.Errorf("source snapshot changed")
 		}
 		if record.OwnedSchema {
