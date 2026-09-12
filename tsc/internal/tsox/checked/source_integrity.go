@@ -2,11 +2,12 @@ package checked
 
 import (
 	"fmt"
-	"github.com/microsoft/typescript-go/internal/compiler"
+	"maps"
 	"reflect"
 	"strings"
 
 	"github.com/microsoft/typescript-go/internal/ast"
+	"github.com/microsoft/typescript-go/internal/compiler"
 )
 
 // sourceSyntaxIntegrity retains original field locations as read-only reflection
@@ -14,9 +15,19 @@ import (
 // reflection is used. Capturing field locations also detects replacement of a
 // parent/list/data pointer before following the old descendant fields.
 type sourceSyntaxIntegrity struct {
-	fields []sourceSyntaxField
-	maps   []sourceSyntaxMap
+	fields     []sourceSyntaxField
+	maps       []sourceSyntaxMap
+	stringMaps []sourceSyntaxStringMap
 }
+
+// Identifier tables contain only strings. Retain a private snapshot, then read
+// the current map header and every entry on each validation. This avoids sorting
+// and hashing without caching acceptance or overlooking map replacement.
+type sourceSyntaxStringMap struct {
+	value    reflect.Value
+	original map[string]string
+}
+
 type sourceSyntaxMap struct {
 	value  reflect.Value
 	digest [32]byte
@@ -229,6 +240,10 @@ func (out *sourceSyntaxIntegrity) capture(v reflect.Value) error {
 			}
 		}
 	case reflect.Map:
+		if v.Type() == reflect.TypeFor[map[string]string]() && v.CanInterface() {
+			out.stringMaps = append(out.stringMaps, sourceSyntaxStringMap{v, maps.Clone(v.Interface().(map[string]string))})
+			return nil
+		}
 		digest, err := sourceMetadataDigest(v)
 		if err != nil {
 			return err
@@ -286,6 +301,12 @@ func (s *sourceSyntaxIntegrity) validate() error {
 		}
 		if !same {
 			return fmt.Errorf("original source syntax changed (%s)", v.Type())
+		}
+	}
+	for _, m := range s.stringMaps {
+		current := m.value.Interface().(map[string]string)
+		if (current == nil) != (m.original == nil) || !maps.Equal(current, m.original) {
+			return fmt.Errorf("original source syntax map changed")
 		}
 	}
 	for _, m := range s.maps {
